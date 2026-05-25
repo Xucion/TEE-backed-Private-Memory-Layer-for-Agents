@@ -8,6 +8,8 @@ from langgraph.graph import StateGraph, add_messages
 
 from memory_extractor import extract_memories
 from memory_store import store_memories
+from memory_retriever import retrieve as retrieve_from_vault
+
 
 SYSTEM_PROMPT = "你是一位乐于助人的助手。回答请保持清晰简洁。"
 
@@ -20,21 +22,31 @@ class ChatState(TypedDict):
 
 def retrieve_memory(state: ChatState) -> ChatState:
     query = state["user_input"]
-
-    memories = [
-        "用户有糖尿病，饮食需要控制糖分。",
-        "用户正在秘密准备收购一家芯片公司。",
-        "用户喜欢上午安排重要会议。",
-    ]
-
-    if "饮食" in query or "吃" in query:
-        context = "用户有饮食限制，需要控制糖分。"
-    elif "会议" in query or "日程" in query:
-        context = "用户偏好上午安排重要会议。"
-    else:
-        context = ""
-
+    
+    memories = retrieve_from_vault(query, top_k=3, threshold=0.4)
+    
+    if not memories:
+        return {"memory_context": ""}
+    
+    # Context Minimizer
+    minimized = []
+    for mem in memories:
+        if mem["sensitivity"] == "high":
+            category_hints = {
+                "health":     "用户有健康方面的限制，请给出保守建议。",
+                "business":   "用户有重要商业事务在进行，请谨慎回应相关话题。",
+                "preference": "用户有特殊偏好，请谨慎回应。",
+                "other":      "用户有特殊背景，请谨慎回应。",
+            }
+            minimized.append(category_hints.get(mem["category"], "用户有特殊情况，请谨慎回应。"))
+        else:
+            minimized.append(mem["content"])
+    
+    context = " ".join(minimized)
+    print(f"[MemoryRetriever] 检索到 {len(memories)} 条，注入context: {context}")
     return {"memory_context": context}
+
+
 
 def build_graph():
     model_name = os.getenv("TONGYI_MODEL", "qwen-turbo")
@@ -67,6 +79,11 @@ def build_graph():
     graph.add_edge("retrieve_memory", "chatbot")
     graph.set_finish_point("chatbot")
     return graph.compile()
+
+    # 异步提取并存储，不阻塞用户
+def async_store(conv):
+    memories = extract_memories(conv)
+    store_memories(memories)
 
 def main():
     if not os.getenv("DASHSCOPE_API_KEY"):
@@ -110,16 +127,9 @@ def main():
             print(f"Assistant: {reply}")
 
         history.extend([HumanMessage(content=user_input), reply])
-
-        
-        # 异步提取并存储，不阻塞用户
-        def async_store(conv):
-            memories = extract_memories(conv)
-            store_memories(memories)
-
         threading.Thread(
             target=async_store,
-            args=([HumanMessage(content=user_input), reply],),
+            args=([HumanMessage(content=user_input)],),
             daemon=True
         ).start()
 
