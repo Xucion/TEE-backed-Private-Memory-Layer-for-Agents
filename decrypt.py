@@ -1,4 +1,4 @@
-from memory_store import load_all_memories
+from trusted.memory_store import load_all_memories
 
 memories = load_all_memories()
 for i, mem in enumerate(memories):

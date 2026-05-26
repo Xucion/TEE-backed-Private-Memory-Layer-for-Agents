@@ -1,14 +1,21 @@
 import os
 import json
 import threading
+import sys
+from pathlib import Path
 from typing import Annotated, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_community.chat_models import ChatTongyi
 from langgraph.graph import StateGraph, add_messages
 
-from memory_extractor import extract_memories
-from memory_store import store_memories
-from memory_retriever import retrieve as retrieve_from_vault
+# Support running this file directly via `python untrusted/chat_app.py`.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from trusted.memory_retriever import retrieve as retrieve_from_vault
+from trusted.memory_store import store_memories
+from untrusted.memory_extractor import extract_memories
 
 
 SYSTEM_PROMPT = "你是一位乐于助人的助手。回答请保持清晰简洁。"

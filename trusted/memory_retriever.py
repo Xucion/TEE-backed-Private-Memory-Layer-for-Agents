@@ -1,5 +1,5 @@
 import numpy as np
-from memory_store import load_all_memories
+from trusted.memory_store import load_all_memories
 from langchain_community.embeddings import DashScopeEmbeddings
 
 _embeddings = DashScopeEmbeddings(model="text-embedding-v4")
