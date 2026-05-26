@@ -1,0 +1,39 @@
+loader.entrypoint.uri = "file:{{ gramine.libos }}"
+libos.entrypoint = "/usr/local/bin/python3.12"
+
+loader.argv = [
+  "/usr/local/bin/python3.12",
+  "/project/trusted/vault_server.py",
+]
+
+loader.env.PYTHONPATH = "/project:/home/xzq2628/myenv/lib/python3.12/site-packages"
+loader.env.VIRTUAL_ENV = "/home/xzq2628/myenv"
+loader.env.PATH = "/home/xzq2628/myenv/bin:/usr/local/bin:/usr/bin:/bin"
+loader.env.VAULT_HOST = "127.0.0.1"
+loader.env.VAULT_PORT = "8765"
+loader.env.VAULT_LOG_LEVEL = "INFO"
+loader.env.DASHSCOPE_API_KEY = "{{ env.DASHSCOPE_API_KEY }}"
+
+fs.mounts = [
+  { path = "/project", uri = "file:{{ project_dir }}" },
+  { path = "/home/xzq2628/myenv", uri = "file:/home/xzq2628/myenv" },
+  { path = "/usr", uri = "file:/usr" },
+  { path = "/lib", uri = "file:/lib" },
+  { path = "/lib64", uri = "file:/lib64" },
+  { path = "/etc", uri = "file:/etc" },
+  { path = "/tmp", uri = "file:/tmp" },
+]
+
+sgx.allowed_files = [
+  "file:/usr/local/bin/python3.12",
+  "file:{{ project_dir }}",
+  "file:/home/xzq2628/myenv",
+  "file:/usr",
+  "file:/lib",
+  "file:/lib64",
+  "file:/etc",
+  "file:/tmp",
+]
+
+sgx.enclave_size = "2G"
+sys.disallow_subprocesses = true
