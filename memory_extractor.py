@@ -67,8 +67,9 @@ def _normalize_memories(data) -> list[dict]:
 
     return normalized
 
+llm = ChatTongyi(model=os.getenv("TONGYI_MODEL", "qwen-turbo"))
 def extract_memories(conversation: list[BaseMessage]) -> list[dict]:
-    llm = ChatTongyi(model=os.getenv("TONGYI_MODEL", "qwen-turbo"))
+
     
     # Only user-authored text is eligible for long-term memory extraction.
     user_lines = []

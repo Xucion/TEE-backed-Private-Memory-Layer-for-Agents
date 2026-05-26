@@ -1,3 +1,5 @@
 langgraph>=0.2.60
 langchain-community>=0.3.0
 dashscope>=1.20.0
+numpy>=1.26.0
+cryptography>=42.0.0

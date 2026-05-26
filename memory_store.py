@@ -41,25 +41,42 @@ def _save_memories(memories: list[dict]) -> None:
     with open(MEMORY_FILE, "wb") as f:
         f.write(encrypted)
 
-def store_memories(new_memories: list[dict]) -> None:
-    if not new_memories:
-        return
-    existing = _load_memories()
+def _is_duplicate(new_content: str, existing: list[dict], threshold: float = 0.8) -> bool:
+    if not existing:
+        return False
+    existing_vecs = np.stack([np.array(m["embedding"]) for m in existing])
+    new_vec = _normalize(np.array(_embeddings.embed_query(new_content)))
+    scores = (existing_vecs @ new_vec).flatten()
+    print(np.max(scores))
+    return float(np.max(scores)) >= threshold
+
+
 
 def store_memories(new_memories: list[dict]) -> None:
     if not new_memories:
         return
     existing = _load_memories()
+
+    added = 0
+
     for mem in new_memories:
         # 统一用 DashScope 编码
         vec = _normalize(np.array(_embeddings.embed_query(mem["content"])))
+
+        if _is_duplicate(mem["content"], existing):
+            print(f"[MemoryStore] 跳过重复记忆: {mem['content']}")
+            continue
+    
         mem["id"] = str(uuid.uuid4())
         mem["created_at"] = datetime.now().isoformat()
         mem["embedding"] = vec.tolist()
         mem["embedding_model"] = "text-embedding-v4"  # 记录模型版本
         existing.append(mem)
-    _save_memories(existing)
-    print(f"[MemoryStore] 已存储 {len(new_memories)} 条记忆")
+        added += 1
+
+    if added > 0:
+        _save_memories(existing)
+        print(f"[MemoryStore] 已存储 {added} 条记忆")
 
 def load_all_memories() -> list[dict]:
     return _load_memories()
