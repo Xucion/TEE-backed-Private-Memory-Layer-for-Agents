@@ -1,25 +1,41 @@
-# Python cache and build outputs
+# Python cache, test, and build outputs
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.coverage
+.coverage.*
+htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
+build/
+dist/
+*.egg-info/
 
 # Virtual environments
 .venv/
 venv/
 env/
 
-# Local environment and secrets
+# Local environment, runtime state, and secrets
 .env
 .env.*
+!.env.example
+*.log
+*.tmp
+*.sock
 memory.key
 memories.enc
 
 # Gramine generated files
 trusted/vault.manifest
+*.manifest.sgx
+*.sig
+*.token
 
 # Editor and OS files
 .DS_Store
