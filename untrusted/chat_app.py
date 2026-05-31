@@ -4,7 +4,7 @@ import logging
 import threading
 import sys
 from pathlib import Path
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_community.chat_models import ChatTongyi
 from langgraph.graph import StateGraph, add_messages
@@ -14,12 +14,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from interface.vault_api import VaultApiError, retrieve_context, store_memories
+from interface.vault_api import (
+    VaultApiError,
+    open_user_vault_session,
+    secure_retrieve_user_context,
+    secure_store_user_memories,
+)
 from untrusted.memory_extractor import extract_memories
 
 
 SYSTEM_PROMPT = "你是一位乐于助人的助手。回答请保持清晰简洁。"
+logging.basicConfig(
+    level=os.getenv("CHAT_LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s [ChatApp] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
+VAULT_SESSION: dict[str, Any] | None = None
 
 
 class ChatState(TypedDict):
@@ -30,9 +40,13 @@ class ChatState(TypedDict):
 
 def retrieve_memory(state: ChatState) -> ChatState:
     query = state["user_input"]
+    if VAULT_SESSION is None:
+        return {"memory_context": ""}
+
+    user_id = str(VAULT_SESSION["user_id"])
     
     try:
-        context = retrieve_context(query, top_k=3, threshold=0.4)
+        context = secure_retrieve_user_context(VAULT_SESSION, user_id, query, top_k=3, threshold=0.4)
     except VaultApiError:
         logger.exception("Vault retrieval failed; continuing without memory context")
         context = ""
@@ -74,16 +88,46 @@ def build_graph():
 
     # 异步提取并存储，不阻塞用户
 def async_store(conv):
+    if VAULT_SESSION is None:
+        return
+
     try:
         memories = extract_memories(conv)
-        store_memories(memories)
+        if memories:
+            secure_store_user_memories(VAULT_SESSION, str(VAULT_SESSION["user_id"]), memories)
     except Exception:
         logger.exception("Asynchronous memory storage failed")
+
+
+def initialize_vault_session() -> None:
+    global VAULT_SESSION
+
+    user_id = os.getenv("VAULT_USER_ID", "default_user")
+    user_key = os.getenv("USER_MEMORY_KEY")
+    logger.info(
+        "准备初始化 vault 安全会话: user_id=%s user_key_source=%s",
+        user_id,
+        "env" if user_key else "temporary",
+    )
+    if not user_key:
+        print("未设置 USER_MEMORY_KEY，本次运行将使用临时 per-user key；重启后无法读取旧记忆。")
+
+    try:
+        VAULT_SESSION = open_user_vault_session(user_id, user_key)
+        logger.info("vault 安全会话初始化成功: user_id=%s session_id=%s", VAULT_SESSION["user_id"], VAULT_SESSION["session_id"][:8])
+        print(f"Vault 安全信道已建立，当前 user_id: {VAULT_SESSION['user_id']}")
+    except VaultApiError:
+        VAULT_SESSION = None
+        logger.exception("Vault secure session setup failed; continuing without long-term memory")
+        print("Vault 安全信道建立失败，将以无长期记忆模式继续。")
+
 
 def main():
     if not os.getenv("DASHSCOPE_API_KEY"):
         raise EnvironmentError("Missing DASHSCOPE_API_KEY. Please export it before running.")
 
+    logger.info("Chat app 启动，准备连接 vault")
+    initialize_vault_session()
     app = build_graph()
     history: list[BaseMessage] = [SystemMessage(content=SYSTEM_PROMPT)]
 

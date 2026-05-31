@@ -1,9 +1,13 @@
+import base64
 import json
 import logging
 import os
+import secrets
 import socketserver
 import sys
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,15 +16,91 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from common.sim_secure_channel import (
+    SecureChannelError,
+    canonical_json,
+    decrypt_json,
+    derive_channel_key,
+    encrypt_json,
+    generate_x25519_keypair,
+    public_key_from_b64,
+    public_key_to_b64,
+)
+from cryptography.hazmat.primitives import serialization
 from trusted.memory_retriever import retrieve
 from trusted.memory_store import store_memories
+from trusted.user_key_manager import UserKeyError, get_user_key, provision_user_key
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_REQUEST_BYTES = 1024 * 1024
 
+# 模拟 RA 的固定身份声明。真实 SGX 环境会由 quote measurement 替代。
+SIM_RA_PROTOCOL_VERSION = "sim-ra-v1"
+SIM_RA_MODE = "SIMULATED_RA_ONLY"
+SIM_RA_VAULT_ID = "confidential-agent-memory-vault"
+SIM_RA_MEASUREMENT = "confidential-agent-memory-vault-dev-v1"
+MAX_NONCE_CHARS = 128
+SIM_RA_PRIVATE_KEY_FILE = PROJECT_ROOT / "trusted" / "sim_ra_private_key.pem"
+SESSION_TTL_SECONDS = 300
+
 _STORE_LOCK = threading.Lock()
+_SESSION_LOCK = threading.Lock()
+_SESSIONS: dict[str, dict[str, Any]] = {}
+
+VALID_MEMORY_TYPES = {
+    "preference",
+    "profile",
+    "health",
+    "project",
+    "instruction",
+    "other",
+}
+
+VALID_MEMORY_CATEGORIES = {
+    "health",
+    "preference",
+    "business",
+    "other",
+}
+
+VALID_MEMORY_SENSITIVITIES = {
+    "high",
+    "low",
+}
+
+VALID_MEMORY_PREDICATES = {
+    "likes",
+    "dislikes",
+    "has_goal",
+    "has_health_condition",
+    "prefers_response_style",
+    "works_on_project",
+    "lives_in",
+    "works_at",
+    "has_job_search_status",
+    "prefers_language",
+    "stated_fact",
+}
+
+VALID_MEMORY_SOURCES = {
+    "user",
+    "system",
+    "tool",
+    "admin",
+}
+
+PREDICATE_DEFAULT_SLOTS = {
+    "lives_in": "profile.current_city",
+    "works_at": "profile.current_company",
+    "has_job_search_status": "profile.job_search_status",
+    "prefers_language": "instruction.response_language",
+}
+
+PREDICATE_ALLOWED_SLOTS = {
+    "works_on_project": {"project.primary_project"},
+}
 
 logging.basicConfig(
     level=os.getenv("VAULT_LOG_LEVEL", "INFO"),
@@ -31,6 +111,17 @@ logger = logging.getLogger(__name__)
 
 class VaultError(Exception):
     """预期的请求或验证失败，将返回给 vault 客户端。"""
+
+
+def _load_sim_ra_private_key():
+    key_data = SIM_RA_PRIVATE_KEY_FILE.read_bytes()
+    return serialization.load_pem_private_key(key_data, password=None)
+
+
+def _sign_quote(quote: dict[str, Any]) -> str:
+    private_key = _load_sim_ra_private_key()
+    signature = private_key.sign(canonical_json(quote))
+    return base64.b64encode(signature).decode("ascii")
 
 
 def _success(data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -60,26 +151,190 @@ def _coerce_threshold(value: Any, default: float) -> float:
     return threshold
 
 
-def _validate_memory(mem: Any) -> dict[str, str]:
+def _normalize_slot_part(value: Any) -> str:
+    return "_".join(str(value or "").strip().lower().split())
+
+
+def _normalize_memory_slot(predicate: str, object_value: str, raw_slot: Any) -> str | None:
+    slot = None
+    if raw_slot is not None:
+        slot = _normalize_slot_part(raw_slot) or None
+
+    if predicate in {"likes", "dislikes"}:
+        object_part = _normalize_slot_part(object_value)
+        if object_part:
+            return f"preference.like_dislike:{object_part}"
+        return None
+
+    default_slot = PREDICATE_DEFAULT_SLOTS.get(predicate)
+    if default_slot:
+        return default_slot
+
+    allowed_slots = PREDICATE_ALLOWED_SLOTS.get(predicate, set())
+    if slot in allowed_slots:
+        return slot
+
+    return None
+
+
+def _validate_nonce(value: Any) -> str:
+    if not isinstance(value, str):
+        raise VaultError("attest 操作需要提供字符串 nonce")
+
+    nonce = value.strip()
+    if not nonce:
+        raise VaultError("attest 操作需要提供非空 nonce")
+    if len(nonce) > MAX_NONCE_CHARS:
+        raise VaultError(f"nonce 长度不能超过 {MAX_NONCE_CHARS}")
+
+    return nonce
+
+
+def _build_simulated_quote(nonce: str) -> dict[str, str]:
+    return {
+        "protocol_version": SIM_RA_PROTOCOL_VERSION,
+        "mode": SIM_RA_MODE,
+        "vault_id": SIM_RA_VAULT_ID,
+        "measurement": SIM_RA_MEASUREMENT,
+        "nonce": nonce,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _get_session_key(session_id: Any) -> bytes:
+    if not isinstance(session_id, str) or not session_id:
+        raise VaultError("需要有效的 session_id")
+
+    now = time.time()
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(session_id)
+        if not session:
+            logger.warning("安全信道 session 查询失败: session_id=%s", str(session_id)[:8])
+            raise VaultError("安全信道 session 不存在或已过期")
+
+        if now - float(session["created_at"]) > SESSION_TTL_SECONDS:
+            _SESSIONS.pop(session_id, None)
+            logger.warning("安全信道 session 已过期: session_id=%s", session_id[:8])
+            raise VaultError("安全信道 session 已过期")
+
+        return session["channel_key"]
+
+
+def _decrypt_secure_payload(session_id: str, request: dict[str, Any]) -> dict[str, Any]:
+    logger.info("开始解密安全信道请求: session_id=%s", session_id[:8])
+    try:
+        payload = decrypt_json(
+            _get_session_key(session_id),
+            session_id,
+            request.get("nonce"),
+            request.get("ciphertext"),
+        )
+    except SecureChannelError as exc:
+        raise VaultError(str(exc)) from exc
+    logger.info(
+        "安全信道请求解密成功: session_id=%s payload_action=%s",
+        session_id[:8],
+        payload.get("action") or payload.get("type"),
+    )
+    return payload
+
+
+def _encrypt_secure_payload(session_id: str, payload: dict[str, Any]) -> dict[str, str]:
+    logger.info(
+        "加密安全信道响应: session_id=%s payload_keys=%s",
+        session_id[:8],
+        sorted(payload.keys()),
+    )
+    try:
+        return encrypt_json(_get_session_key(session_id), session_id, payload)
+    except SecureChannelError as exc:
+        raise VaultError(str(exc)) from exc
+
+
+def _legacy_plaintext_allowed() -> bool:
+    return os.getenv("VAULT_ALLOW_LEGACY_PLAINTEXT", "").lower() in {"1", "true", "yes"}
+
+
+def _get_request_user_key(request: dict[str, Any]) -> tuple[str, bytes]:
+    user_id = request.get("user_id")
+    try:
+        user_key = get_user_key(user_id)
+    except UserKeyError as exc:
+        raise VaultError(str(exc)) from exc
+
+    normalized_user_id = str(user_id).strip()
+    logger.info("已获取用户记忆密钥: user_id=%s", normalized_user_id)
+    return normalized_user_id, user_key
+
+
+def _validate_memory(mem: Any) -> dict[str, Any]:
     if not isinstance(mem, dict):
         raise VaultError("每条记忆必须是一个对象")
 
     content = str(mem.get("content", "")).strip()
+    memory_type = str(mem.get("memory_type", "other")).strip()
     category = str(mem.get("category", "other")).strip()
     sensitivity = str(mem.get("sensitivity", "low")).strip()
+    subject = str(mem.get("subject", "user")).strip()
+    predicate = str(mem.get("predicate", "stated_fact")).strip()
+    object_value = str(mem.get("object", "")).strip()
+    value = mem.get("value", True)
+    slot = mem.get("slot")
+    source = str(mem.get("source", "user")).strip()
+    confidence = mem.get("confidence", 0.8)
 
     if not content:
         raise VaultError("记忆内容不能为空")
-    if category not in {"health", "preference", "business", "other"}:
-        raise VaultError(f"不支持的记忆分类: {category}")
-    if sensitivity not in {"high", "low"}:
-        raise VaultError(f"不支持的记忆敏感度: {sensitivity}")
+    if memory_type not in VALID_MEMORY_TYPES:
+        memory_type = "other"
+    if category not in VALID_MEMORY_CATEGORIES:
+        category = "other"
+    if sensitivity not in VALID_MEMORY_SENSITIVITIES:
+        sensitivity = "low"
+    if predicate not in VALID_MEMORY_PREDICATES:
+        predicate = "stated_fact"
+    if source not in VALID_MEMORY_SOURCES:
+        source = "user"
+    if subject != "user":
+        subject = "user"
+    if not object_value:
+        object_value = content
+    slot = _normalize_memory_slot(predicate, object_value, slot)
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        confidence = 0.8
+    confidence = min(1.0, max(0.0, confidence))
 
+    if memory_type == "health" or category == "health":
+        sensitivity = "high"
     return {
         "content": content,
+        "memory_type": memory_type,
         "category": category,
         "sensitivity": sensitivity,
+        "subject": subject,
+        "predicate": predicate,
+        "object": object_value,
+        "value": value,
+        "slot": slot,
+        "confidence": confidence,
+        "source": source,
     }
+
+
+def _handle_store_data(request: dict[str, Any]) -> dict[str, Any]:
+    user_id, user_key = _get_request_user_key(request)
+    raw_memories = request.get("memories")
+    if not isinstance(raw_memories, list):
+        raise VaultError("store 操作需要提供 memories 列表")
+
+    logger.info("开始处理 store 请求: user_id=%s memory_count=%d", user_id, len(raw_memories))
+    memories = [_validate_memory(mem) for mem in raw_memories]
+    with _STORE_LOCK:
+        stored_count = store_memories(user_id, user_key, memories)
+    logger.info("store 请求完成: user_id=%s stored_count=%d", user_id, stored_count)
+    return {"stored_count": stored_count}
 
 
 def _minimize_memories(memories: list[dict[str, Any]]) -> str:
@@ -104,36 +359,178 @@ def _minimize_memories(memories: list[dict[str, Any]]) -> str:
     return " ".join(deduped)
 
 
+def _handle_retrieve_data(request: dict[str, Any]) -> dict[str, Any]:
+    user_id, user_key = _get_request_user_key(request)
+    query = str(request.get("query", "")).strip()
+    if not query:
+        raise VaultError("retrieve 操作需要提供非空的查询内容")
+
+    top_k = _coerce_positive_int(request.get("top_k"), default=3, max_value=20)
+    threshold = _coerce_threshold(request.get("threshold"), default=0.4)
+    logger.info(
+        "开始处理 retrieve 请求: user_id=%s query_chars=%d top_k=%d threshold=%.3f",
+        user_id,
+        len(query),
+        top_k,
+        threshold,
+    )
+    with _STORE_LOCK:
+        memories = retrieve(user_id, user_key, query, top_k=top_k, threshold=threshold)
+    memory_context = _minimize_memories(memories)
+    logger.info(
+        "retrieve 请求完成: user_id=%s retrieved_count=%d context_chars=%d",
+        user_id,
+        len(memories),
+        len(memory_context),
+    )
+
+    return {
+        "memory_context": memory_context,
+        "retrieved_count": len(memories),
+    }
+
+
 def handle_request(request: dict[str, Any]) -> dict[str, Any]:
     action = request.get("action")
-    if action == "store":
-        raw_memories = request.get("memories")
-        if not isinstance(raw_memories, list):
-            raise VaultError("store 操作需要提供 memories 列表")
 
-        memories = [_validate_memory(mem) for mem in raw_memories]
-        with _STORE_LOCK:
-            stored_count = store_memories(memories)
-
-        return _success({"stored_count": stored_count})
-
-    if action == "retrieve":
-        query = str(request.get("query", "")).strip()
-        if not query:
-            raise VaultError("retrieve 操作需要提供非空的查询内容")
-
-        top_k = _coerce_positive_int(request.get("top_k"), default=3, max_value=20)
-        threshold = _coerce_threshold(request.get("threshold"), default=0.4)
-        with _STORE_LOCK:
-            memories = retrieve(query, top_k=top_k, threshold=threshold)
-        memory_context = _minimize_memories(memories)
-
+    if action == "attest":
+        nonce = _validate_nonce(request.get("nonce"))
+        logger.info("收到模拟 RA attest 请求: nonce_chars=%d", len(nonce))
+        quote = _build_simulated_quote(nonce)
+        signature = _sign_quote(quote)
+        logger.info(
+            "模拟 RA quote 已签名: measurement=%s signature_chars=%d",
+            quote["measurement"],
+            len(signature),
+        )
         return _success(
             {
-                "memory_context": memory_context,
-                "retrieved_count": len(memories),
+                "quote": quote,
+                "signature": signature,
             }
         )
+
+    if action == "handshake_start":
+        nonce = _validate_nonce(request.get("nonce"))
+        client_pubkey_b64 = request.get("client_pubkey")
+        logger.info(
+            "收到安全信道握手请求: nonce_chars=%d client_pubkey_chars=%d",
+            len(nonce),
+            len(client_pubkey_b64) if isinstance(client_pubkey_b64, str) else -1,
+        )
+        try:
+            client_pubkey = public_key_from_b64(client_pubkey_b64, "client_pubkey")
+        except SecureChannelError as exc:
+            raise VaultError(str(exc)) from exc
+
+        vault_private_key, vault_public_key = generate_x25519_keypair()
+        vault_pubkey_b64 = public_key_to_b64(vault_public_key)
+        session_id = secrets.token_urlsafe(24)
+
+        quote = _build_simulated_quote(nonce)
+        quote["session_id"] = session_id
+        quote["vault_pubkey"] = vault_pubkey_b64
+        signature = _sign_quote(quote)
+
+        shared_secret = vault_private_key.exchange(client_pubkey)
+        channel_key = derive_channel_key(shared_secret, quote, str(client_pubkey_b64))
+
+        with _SESSION_LOCK:
+            _SESSIONS[session_id] = {
+                "channel_key": channel_key,
+                "created_at": time.time(),
+            }
+
+        logger.info(
+            "安全信道握手完成: session_id=%s vault_pubkey_chars=%d ttl_seconds=%d",
+            session_id[:8],
+            len(vault_pubkey_b64),
+            SESSION_TTL_SECONDS,
+        )
+        return _success(
+            {
+                "session_id": session_id,
+                "vault_pubkey": vault_pubkey_b64,
+                "quote": quote,
+                "signature": signature,
+            }
+        )
+
+    if action == "secure_ping":
+        session_id = request.get("session_id")
+        if not isinstance(session_id, str):
+            raise VaultError("secure_ping 需要 session_id")
+
+        logger.info("收到 secure_ping: session_id=%s", session_id[:8])
+        payload = _decrypt_secure_payload(session_id, request)
+        if payload.get("type") != "ping":
+            raise VaultError("secure_ping 明文类型无效")
+
+        logger.info("secure_ping 解密成功，准备返回 pong: session_id=%s", session_id[:8])
+        return _success(
+            _encrypt_secure_payload(
+                session_id,
+                {
+                    "type": "pong",
+                    "message": str(payload.get("message", "")),
+                },
+            )
+        )
+
+    if action == "secure_provision_user_key":
+        session_id = request.get("session_id")
+        if not isinstance(session_id, str):
+            raise VaultError("secure_provision_user_key 需要 session_id")
+
+        logger.info("收到加密用户密钥注入请求: session_id=%s", session_id[:8])
+        payload = _decrypt_secure_payload(session_id, request)
+        if payload.get("action") != "provision_user_key":
+            raise VaultError("安全信道明文 action 无效")
+
+        try:
+            user_id = provision_user_key(payload.get("user_id"), payload.get("user_key"))
+        except UserKeyError as exc:
+            raise VaultError(str(exc)) from exc
+
+        logger.info("用户密钥注入完成: session_id=%s user_id=%s", session_id[:8], user_id)
+        return _success(
+            _encrypt_secure_payload(
+                session_id,
+                {
+                    "status": "ok",
+                    "user_id": user_id,
+                },
+            )
+        )
+
+    if action == "secure_request":
+        session_id = request.get("session_id")
+        if not isinstance(session_id, str):
+            raise VaultError("secure_request 需要 session_id")
+
+        logger.info("收到 secure_request: session_id=%s", session_id[:8])
+        payload = _decrypt_secure_payload(session_id, request)
+        inner_action = payload.get("action")
+        logger.info("secure_request 内部操作: session_id=%s inner_action=%s", session_id[:8], inner_action)
+        if inner_action == "store":
+            data = _handle_store_data(payload)
+        elif inner_action == "retrieve":
+            data = _handle_retrieve_data(payload)
+        else:
+            raise VaultError(f"secure_request 不支持的内部操作: {inner_action}")
+
+        logger.info("secure_request 处理完成: session_id=%s inner_action=%s", session_id[:8], inner_action)
+        return _success(_encrypt_secure_payload(session_id, data))
+
+    if action == "store":
+        if not _legacy_plaintext_allowed():
+            raise VaultError("明文 store 已禁用，请使用 secure_request")
+        return _success(_handle_store_data(request))
+
+    if action == "retrieve":
+        if not _legacy_plaintext_allowed():
+            raise VaultError("明文 retrieve 已禁用，请使用 secure_request")
+        return _success(_handle_retrieve_data(request))
 
     raise VaultError(f"不支持的操作: {action}")
 

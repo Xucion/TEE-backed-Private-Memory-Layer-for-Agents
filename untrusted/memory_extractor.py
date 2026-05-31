@@ -8,19 +8,52 @@ EXTRACTOR_PROMPT = """
 只从“用户原话”中提取客观事实或明确偏好，不要从助手回复、建议、推断或临时任务中提取。
 不要保存一次性请求，例如“帮我推荐饮食”“我想喝粥”，除非用户明确表达这是长期偏好。
 如果没有值得记忆的信息，返回空列表。
+
 content 字段必须是规范化后的稳定事实：
 - 使用第三人称“用户...”陈述，不要使用“我...”。
 - 去掉“呀、啊、吧、呢、哦、啦”等语气词。
 - 只做用户原话支持的轻量规范化，不要补充用户没有表达的新事实。
 - 例如“我喜欢喝粥呀”可输出为“用户喜欢喝粥”；如果用户只说“我有糖尿”，不要擅自扩写为确诊糖尿病以外的信息。
 
+memory_type 规则：
+- preference：长期偏好，例如喜欢、不喜欢、偏好。
+- profile：用户身份、背景、长期目标。
+- health：健康限制或医疗相关事实。
+- project：用户长期项目、代码库、研究方向。
+- instruction：用户希望助手长期遵守的交互偏好。
+- other：确实值得记忆但无法归类的事实。
+
+结构化字段规则：
+- subject 当前固定为 "user"。
+- predicate 用英文小写 snake_case。
+- object 使用短语，不要整句。
+- value 用简单 JSON 值，例如 true、false、字符串或数字。
+- confidence 只表示这条候选来自用户原话的明确程度，范围 0 到 1。
+- slot 表示这条 memory 是否占用互斥事实槽位；可共存事实填 null。
+- 当前支持的 slot 示例：
+  - profile.current_city：当前居住城市。
+  - profile.current_company：当前公司或组织。
+  - profile.job_search_status：当前求职状态。
+  - project.primary_project：当前主要项目。
+  - instruction.response_language：当前回答语言偏好。
+  - preference.like_dislike:对象：同一对象的喜欢/不喜欢互斥。
+- 多目标、多项目、多个回答风格偏好通常可以共存，slot 应为 null。
+- 不要从助手建议或模型推测中生成 memory。
+
 输出严格遵循以下JSON格式，不要输出任何其他内容：
 {{
   "memories": [
     {{
-      "content": "记忆内容",
+      "content": "规范化后的长期事实",
+      "memory_type": "preference | profile | health | project | instruction | other",
       "category": "health | preference | business | other",
       "sensitivity": "high | low",
+      "subject": "user",
+      "predicate": "likes | dislikes | has_goal | has_health_condition | prefers_response_style | works_on_project | lives_in | works_at | has_job_search_status | prefers_language | stated_fact",
+      "object": "事实对象",
+      "value": true,
+      "slot": null,
+      "confidence": 0.8,
       "source": "user"
     }}
   ]
@@ -37,6 +70,27 @@ REQUEST_MARKERS = {"帮我", "为我", "给我", "推荐", "建议", "做一下"
 META_MEMORY_MARKERS = {"你知道", "你记得", "我喜欢吃什么", "我喜欢什么"}
 TRAILING_PARTICLES = ("呀", "啊", "吧", "呢", "哦", "啦", "哈")
 
+VALID_MEMORY_TYPES = {
+    "preference",
+    "profile",
+    "health",
+    "project",
+    "instruction",
+    "other",
+}
+VALID_PREDICATES = {
+    "likes",
+    "dislikes",
+    "has_goal",
+    "has_health_condition",
+    "prefers_response_style",
+    "works_on_project",
+    "lives_in",
+    "works_at",
+    "has_job_search_status",
+    "prefers_language",
+    "stated_fact",
+}
 
 def _canonicalize_content(content: str) -> str:
     content = content.strip()
@@ -86,6 +140,14 @@ def _normalize_memories(data) -> list[dict]:
         category = mem.get("category", "other")
         sensitivity = mem.get("sensitivity", "low")
         source = mem.get("source")
+        memory_type = mem.get("memory_type", "other")
+        subject = mem.get("subject", "user")
+        predicate = mem.get("predicate", "stated_fact")
+        object_value = str(mem.get("object", "")).strip()
+        value = mem.get("value", True)
+        slot = mem.get("slot")
+        confidence = mem.get("confidence", 0.8)
+
 
         if category not in VALID_CATEGORIES:
             category = "other"
@@ -93,12 +155,34 @@ def _normalize_memories(data) -> list[dict]:
             sensitivity = "low"
         if source != "user":
             continue
+        if memory_type not in VALID_MEMORY_TYPES:
+            memory_type = "other"
+        if predicate not in VALID_PREDICATES:
+            predicate = "stated_fact"
+        if subject != "user":
+            subject = "user"
+        if slot is not None:
+            slot = str(slot).strip() or None
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.8
+
+        confidence = min(1.0, max(0.0, confidence))
 
         normalized.append(
             {
                 "content": content,
+                "memory_type": memory_type,
                 "category": category,
                 "sensitivity": sensitivity,
+                "subject": subject,
+                "predicate": predicate,
+                "object": object_value,
+                "value": value,
+                "slot": slot,
+                "confidence": confidence,
+                "source": "user",
             }
         )
 

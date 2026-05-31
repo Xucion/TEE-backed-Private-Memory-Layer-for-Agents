@@ -8,8 +8,9 @@ def _normalize(vec: np.ndarray) -> np.ndarray:
     norm = np.linalg.norm(vec)
     return vec / max(norm, 1e-9)
 
-def retrieve(query: str, top_k: int = 3, threshold: float = 0.4) -> list[dict]:
-    memories = load_all_memories()
+
+def retrieve(user_id: str, user_key: bytes, query: str, top_k: int = 3, threshold: float = 0.4) -> list[dict]:
+    memories = load_all_memories(user_id, user_key)
     if not memories:
         return []
 
