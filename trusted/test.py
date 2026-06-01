@@ -1,41 +1,44 @@
-from memory_store import _build_memory_record
+from cryptography.fernet import Fernet
 
-def rec(content, predicate, obj, memory_type="profile"):
-    return _build_memory_record({
-        "content": content,
-        "memory_type": memory_type,
-        "category": "other",
-        "sensitivity": "low",
-        "subject": "user",
-        "predicate": predicate,
-        "object": obj,
-        "value": True,
-        "confidence": 0.8,
-        "source": "user",
-    }, [0.1, 0.2, 0.3])
+from trusted.user_key_manager import provision_user_key
+from trusted.memory_store import _save_memories
+from trusted.vault_server import _handle_list_memories_data, _handle_forget_data
 
-goal1 = rec("用户正在找 Agent 实习", "has_goal", "Agent 实习")
-goal2 = rec("用户正在练英语", "has_goal", "练英语")
+user_id = "handler_list_forget_user"
+user_key = Fernet.generate_key()
 
-style1 = rec("用户喜欢中文回答", "prefers_response_style", "中文回答", "instruction")
-style2 = rec("用户喜欢代码示例", "prefers_response_style", "代码示例", "instruction")
+provision_user_key(user_id, user_key.decode("ascii"))
 
-like = rec("用户喜欢咖啡", "likes", "咖啡", "preference")
-dislike = rec("用户不喜欢咖啡", "dislikes", "咖啡", "preference")
+_save_memories(user_id, user_key, [
+    {
+        "id": "m1",
+        "content": "用户喜欢喝粥",
+        "status": "active",
+        "embedding": [1.0, 0.0],
+    }
+])
 
-city1 = rec("用户当前城市是北京", "current_city", "北京")
-city2 = rec("用户当前城市是上海", "current_city", "上海")
+listed = _handle_list_memories_data({
+    "user_id": user_id,
+    "status": "active",
+})
+print("listed:", listed)
+assert listed["memory_count"] == 1
+assert listed["memories"][0]["id"] == "m1"
+assert "embedding" not in listed["memories"][0]
 
-print("goals conflict?", goal1["conflict_key"] == goal2["conflict_key"])
-print("styles conflict?", style1["conflict_key"] == style2["conflict_key"])
-print("coffee conflict?", like["conflict_key"] == dislike["conflict_key"])
-print("city conflict?", city1["conflict_key"] == city2["conflict_key"])
+forgotten = _handle_forget_data({
+    "user_id": user_id,
+    "memory_id": "m1",
+})
+print("forgotten:", forgotten)
+assert forgotten["forgotten_count"] == 1
 
-print(goal1["conflict_key"])
-print(goal2["conflict_key"])
-print(style1["conflict_key"])
-print(style2["conflict_key"])
-print(like["conflict_key"])
-print(dislike["conflict_key"])
-print(city1["conflict_key"])
-print(city2["conflict_key"])
+listed_after = _handle_list_memories_data({
+    "user_id": user_id,
+    "status": "active",
+})
+print("listed_after:", listed_after)
+assert listed_after["memory_count"] == 0
+
+print("vault handlers OK")

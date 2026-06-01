@@ -1,16 +1,23 @@
 import numpy as np
-from trusted.memory_store import load_all_memories
+from trusted.memory_store import ACTIVE_STATUS, load_all_memories, touch_memories
 from langchain_community.embeddings import DashScopeEmbeddings
 
 _embeddings = DashScopeEmbeddings(model="text-embedding-v4")
 
+
 def _normalize(vec: np.ndarray) -> np.ndarray:
+    # 输入 numpy 向量；输出单位化向量；作用是为余弦相似度计算做归一化。
     norm = np.linalg.norm(vec)
     return vec / max(norm, 1e-9)
 
 
 def retrieve(user_id: str, user_key: bytes, query: str, top_k: int = 3, threshold: float = 0.4) -> list[dict]:
-    memories = load_all_memories(user_id, user_key)
+    # 输入用户标识、密钥、查询和检索参数；输出匹配记忆列表；作用是按向量相似度召回 active 记忆。
+    memories = [
+        m for m in load_all_memories(user_id, user_key)
+        if m.get("status", ACTIVE_STATUS) == ACTIVE_STATUS
+        and isinstance(m.get("embedding"), list)
+    ]
     if not memories:
         return []
 
@@ -22,7 +29,7 @@ def retrieve(user_id: str, user_key: bytes, query: str, top_k: int = 3, threshol
     scores = (mem_vecs @ query_vec).flatten()
     top_indices = np.argsort(scores)[::-1][:top_k]
 
-    return [
+    results = [
         {
             **{k: v for k, v in memories[idx].items() if k != "embedding"},
             "score": float(scores[idx])
@@ -30,3 +37,11 @@ def retrieve(user_id: str, user_key: bytes, query: str, top_k: int = 3, threshol
         for idx in top_indices
         if scores[idx] >= threshold
     ]
+
+    touch_memories(
+        user_id,
+        user_key,
+        [str(memory["id"]) for memory in results if memory.get("id")]
+    )
+
+    return results

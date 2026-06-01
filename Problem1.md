@@ -151,7 +151,7 @@ The prompt also asks for a `source` field:
 ```json
 {
   "content": "记忆内容",
-  "category": "health | preference | business | other",
+  "memory_type": "preference | profile | health | project | instruction | other",
   "sensitivity": "high | low",
   "source": "user"
 }
@@ -167,7 +167,7 @@ The filter:
 
 - Drops non-dictionary items.
 - Drops empty memory content.
-- Normalizes unknown categories to `other`.
+- Normalizes unknown memory types to `other`.
 - Normalizes unknown sensitivity values to `low`.
 - Drops any memory whose `source` is not `user`.
 - Removes the `source` field before storage, keeping the existing memory schema simple.
@@ -182,7 +182,7 @@ Common mitigation patterns include:
 
 - Source gating: only user messages are eligible for memory extraction.
 - Role-aware extraction: assistant messages may be used as context, but not as sources.
-- Structured output: extracted memories include fields like `source`, `category`, and `sensitivity`.
+- Structured output: extracted memories include fields like `source`, `memory_type`, and `sensitivity`.
 - Post-extraction validation: code filters invalid or unsafe outputs before storage.
 - Stable-memory criteria: store durable facts and explicit preferences, not temporary tasks or assistant advice.
 

@@ -39,6 +39,7 @@ class ChatState(TypedDict):
 
 
 def retrieve_memory(state: ChatState) -> ChatState:
+    # 输入 LangGraph 聊天状态；输出带 memory_context 的状态片段；作用是从安全 vault 检索相关记忆。
     query = state["user_input"]
     if VAULT_SESSION is None:
         return {"memory_context": ""}
@@ -55,10 +56,12 @@ def retrieve_memory(state: ChatState) -> ChatState:
 
 
 def build_graph():
+    # 输入无显式参数；输出编译后的 LangGraph 应用；作用是组装检索与聊天生成流程。
     model_name = os.getenv("TONGYI_MODEL", "qwen-turbo")
     llm = ChatTongyi(model=model_name)
 
     def chatbot(state: ChatState) -> ChatState:
+        # 输入 LangGraph 聊天状态；输出新增助手消息的状态片段；作用是调用通义模型生成回复。
         messages = list(state["messages"])
 
         if state.get("memory_context"):
@@ -88,6 +91,7 @@ def build_graph():
 
     # 异步提取并存储，不阻塞用户
 def async_store(conv):
+    # 输入待抽取的用户消息列表；输出无返回值；作用是异步抽取并通过安全 vault 存储记忆。
     if VAULT_SESSION is None:
         return
 
@@ -100,6 +104,7 @@ def async_store(conv):
 
 
 def initialize_vault_session() -> None:
+    # 输入环境变量中的用户配置；输出无返回值；作用是建立安全信道并初始化全局 vault session。
     global VAULT_SESSION
 
     user_id = os.getenv("VAULT_USER_ID", "default_user")
@@ -123,6 +128,7 @@ def initialize_vault_session() -> None:
 
 
 def main():
+    # 输入终端用户交互；输出无返回值；作用是运行命令行多轮聊天主循环。
     if not os.getenv("DASHSCOPE_API_KEY"):
         raise EnvironmentError("Missing DASHSCOPE_API_KEY. Please export it before running.")
 

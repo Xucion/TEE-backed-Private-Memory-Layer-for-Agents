@@ -5,7 +5,6 @@ data = {
         {
             "content": "我喜欢喝粥呀",
             "memory_type": "preference",
-            "category": "preference",
             "sensitivity": "low",
             "subject": "user",
             "predicate": "likes",

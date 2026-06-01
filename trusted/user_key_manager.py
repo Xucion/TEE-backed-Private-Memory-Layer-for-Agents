@@ -16,6 +16,7 @@ class UserKeyError(Exception):
 
 
 def _normalize_user_id(user_id: object) -> str:
+    # 输入任意 user_id；输出规范化 user_id；作用是校验用户标识格式和长度。
     if not isinstance(user_id, str):
         raise UserKeyError("user_id 必须是字符串")
 
@@ -31,6 +32,7 @@ def _normalize_user_id(user_id: object) -> str:
 
 
 def _normalize_fernet_key(user_key: object) -> bytes:
+    # 输入任意用户密钥；输出 Fernet key 字节串；作用是校验密钥类型和可用性。
     if isinstance(user_key, str):
         try:
             key = user_key.encode("ascii")
@@ -50,6 +52,7 @@ def _normalize_fernet_key(user_key: object) -> bytes:
 
 
 def provision_user_key(user_id: object, user_key: object) -> str:
+    # 输入用户标识和 Fernet key；输出规范化 user_id；作用是把用户密钥注入进程内存表。
     normalized_user_id = _normalize_user_id(user_id)
     normalized_key = _normalize_fernet_key(user_key)
 
@@ -60,12 +63,14 @@ def provision_user_key(user_id: object, user_key: object) -> str:
 
 
 def has_user_key(user_id: object) -> bool:
+    # 输入用户标识；输出该用户是否已有 key；作用是查询进程内密钥表。
     normalized_user_id = _normalize_user_id(user_id)
     with _USER_KEYS_LOCK:
         return normalized_user_id in _USER_KEYS
 
 
 def get_user_key(user_id: object) -> bytes:
+    # 输入用户标识；输出 Fernet key 字节串；作用是从进程内密钥表读取用户密钥。
     normalized_user_id = _normalize_user_id(user_id)
     with _USER_KEYS_LOCK:
         key = _USER_KEYS.get(normalized_user_id)

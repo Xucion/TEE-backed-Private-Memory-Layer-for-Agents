@@ -35,7 +35,7 @@ Agent 主流程已经基本完成，项目已经从“单体本地记忆原型�
 
 - 调用外部 LLM，只分析**用户原话**，过滤 AI 回复。
 - 提取客观事实或明确长期偏好。
-- 输出结构化 JSON，字段包括 `content`、`category`（`health` / `preference` / `business` / `other`）、`sensitivity`（`high` / `low`）、`source`。
+- 输出结构化 JSON，字段包括 `content`、`memory_type`（`preference` / `profile` / `health` / `project` / `instruction` / `other`）、`sensitivity`（`high` / `low`）、`source`。
 - 包含输出校验（`_normalize_memories`），过滤格式错误、临时请求、提问句和非用户来源记忆。
 - 规范化第一人称表述，例如将“我喜欢喝粥”转换为“用户喜欢喝粥”。
 

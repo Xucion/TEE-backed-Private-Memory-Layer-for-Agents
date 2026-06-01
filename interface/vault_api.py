@@ -41,14 +41,17 @@ class VaultApiError(Exception):
 
 
 def _vault_host() -> str:
+    # 输入环境变量；输出 vault 主机地址；作用是读取 VAULT_HOST 或使用默认值。
     return os.getenv("VAULT_HOST", DEFAULT_HOST)
 
 
 def _vault_port() -> int:
+    # 输入环境变量；输出 vault 端口号；作用是读取 VAULT_PORT 或使用默认值。
     return int(os.getenv("VAULT_PORT", str(DEFAULT_PORT)))
 
 
 def _send_request(request: dict[str, Any]) -> dict[str, Any]:
+    # 输入明文请求对象；输出响应 data 对象；作用是通过本地 socket 发送 JSON 行协议请求。
     payload = (json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8")
 
     try:
@@ -98,6 +101,7 @@ def _send_request(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def attest_vault(nonce: str) -> dict[str, Any]:
+    # 输入客户端 nonce；输出 quote 和签名；作用是向 vault 请求模拟 RA 身份声明。
     logger.info("开始模拟 RA attest: nonce_chars=%d", len(nonce))
     data = _send_request(
         {
@@ -123,6 +127,7 @@ def attest_vault(nonce: str) -> dict[str, Any]:
 
 
 def store_memories(memories: list[dict[str, Any]]) -> int:
+    # 输入记忆列表；输出存储数量；作用是发送旧版明文 store 请求。
     data = _send_request(
         {
             "action": "store",
@@ -137,6 +142,7 @@ def store_memories(memories: list[dict[str, Any]]) -> int:
 
 
 def store_user_memories(user_id: str, memories: list[dict[str, Any]]) -> int:
+    # 输入用户标识和记忆列表；输出存储数量；作用是发送带 user_id 的旧版明文 store 请求。
     data = _send_request(
         {
             "action": "store",
@@ -152,6 +158,7 @@ def store_user_memories(user_id: str, memories: list[dict[str, Any]]) -> int:
 
 
 def retrieve_context(query: str, top_k: int = 3, threshold: float = 0.4) -> str:
+    # 输入查询文本和检索参数；输出最小化记忆上下文；作用是发送旧版明文 retrieve 请求。
     data = _send_request(
         {
             "action": "retrieve",
@@ -168,6 +175,7 @@ def retrieve_context(query: str, top_k: int = 3, threshold: float = 0.4) -> str:
 
 
 def retrieve_user_context(user_id: str, query: str, top_k: int = 3, threshold: float = 0.4) -> str:
+    # 输入用户标识、查询和检索参数；输出最小化记忆上下文；作用是发送带 user_id 的明文 retrieve 请求。
     data = _send_request(
         {
             "action": "retrieve",
@@ -185,11 +193,13 @@ def retrieve_user_context(user_id: str, query: str, top_k: int = 3, threshold: f
 
 
 def _load_sim_ra_public_key():
+    # 输入无显式参数；输出模拟 RA 公钥对象；作用是加载客户端信任的 quote 验签公钥。
     with open(SIM_RA_PUBLIC_KEY_FILE, "rb") as f:
         return serialization.load_pem_public_key(f.read())
 
 
 def verify_attestation(result: dict[str, Any], expected_nonce: str) -> dict[str, Any]:
+    # 输入 attest 结果和预期 nonce；输出已验证 quote；作用是校验模拟 RA 签名和固定身份字段。
     quote = result.get("quote")
     signature = result.get("signature")
     logger.info("开始验证模拟 RA quote: expected_nonce_chars=%d", len(expected_nonce))
@@ -227,6 +237,7 @@ def verify_attestation(result: dict[str, Any], expected_nonce: str) -> dict[str,
 
 
 def open_secure_channel() -> dict[str, Any]:
+    # 输入无显式参数；输出安全信道 session；作用是完成模拟 RA、X25519 握手和信道密钥派生。
     nonce = secrets.token_urlsafe(24)
     client_private_key, client_public_key = generate_x25519_keypair()
     client_pubkey_b64 = public_key_to_b64(client_public_key)
@@ -280,6 +291,7 @@ def _send_secure_json(
     envelope_action: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    # 输入 session、外层 action 和明文 payload；输出解密响应对象；作用是发送加密 JSON 请求。
     session_id = session.get("session_id")
     channel_key = session.get("channel_key")
 
@@ -311,6 +323,7 @@ def _send_secure_json(
 
 
 def secure_ping(session: dict[str, Any], message: str = "hello") -> dict[str, Any]:
+    # 输入安全信道 session 和消息；输出 pong 响应；作用是验证加密信道可用。
     response = _send_secure_json(
         session,
         "secure_ping",
@@ -330,6 +343,7 @@ def provision_user_key(
     user_id: str,
     user_key: bytes | str | None = None,
 ) -> dict[str, Any]:
+    # 输入 session、user_id 和可选 key；输出注入结果；作用是通过安全信道注入用户 Fernet key。
     if user_key is None:
         user_key = Fernet.generate_key()
 
@@ -365,6 +379,7 @@ def open_user_vault_session(
     user_id: str,
     user_key: bytes | str | None = None,
 ) -> dict[str, Any]:
+    # 输入 user_id 和可选用户 key；输出用户 vault session；作用是建立信道并完成用户密钥注入。
     logger.info("开始初始化用户 vault session: user_id=%s", user_id)
     session = open_secure_channel()
     provisioned = provision_user_key(session, user_id, user_key)
@@ -374,11 +389,31 @@ def open_user_vault_session(
     return session
 
 
+def secure_list_user_memories(
+    session: dict[str, Any],
+    user_id: str,
+    status: str | None = "active",
+) -> list[dict[str, Any]]:
+    payload = {
+        "action": "list_memories",
+        "user_id": user_id,
+    }
+    if status is not None:
+        payload["status"] = status
+
+    response = _send_secure_json(session, "secure_request", payload)
+
+    memories = response.get("memories", [])
+    if not isinstance(memories, list):
+        raise VaultApiError("Vault 服务器返回了无效的 memories")
+    return memories
+
 def secure_store_user_memories(
     session: dict[str, Any],
     user_id: str,
     memories: list[dict[str, Any]],
 ) -> int:
+    # 输入 session、user_id 和记忆列表；输出存储数量；作用是通过安全信道存储用户记忆。
     response = _send_secure_json(
         session,
         "secure_request",
@@ -402,6 +437,7 @@ def secure_retrieve_user_context(
     top_k: int = 3,
     threshold: float = 0.4,
 ) -> str:
+    # 输入 session、user_id、查询和检索参数；输出最小化上下文；作用是通过安全信道检索用户记忆。
     response = _send_secure_json(
         session,
         "secure_request",
@@ -418,3 +454,24 @@ def secure_retrieve_user_context(
         logger.error("Vault 服务器返回了无效的 memory_context: %r", memory_context)
         raise VaultApiError("Vault 服务器返回了无效的 memory_context")
     return memory_context
+
+
+def secure_forget_user_memories(
+    session: dict[str, Any],
+    user_id: str,
+    memory_ids: list[str],
+) -> int:
+    response = _send_secure_json(
+        session,
+        "secure_request",
+        {
+            "action": "forget",
+            "user_id": user_id,
+            "memory_ids": memory_ids,
+        },
+    )
+
+    forgotten_count = response.get("forgotten_count", 0)
+    if not isinstance(forgotten_count, int):
+        raise VaultApiError("Vault 服务器返回了无效的 forgotten_count")
+    return forgotten_count

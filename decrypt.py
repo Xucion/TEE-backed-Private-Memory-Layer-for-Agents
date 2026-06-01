@@ -5,6 +5,7 @@ from trusted.memory_store import load_all_memories
 
 
 def _arg_or_env(index: int, env_name: str) -> str | None:
+    # 输入命令行参数位置和环境变量名；输出字符串或 None；作用是优先读取参数再回退到环境变量。
     if len(sys.argv) > index:
         return sys.argv[index]
     return os.getenv(env_name)
@@ -21,4 +22,5 @@ if not user_id or not user_key:
 
 memories = load_all_memories(user_id, user_key.encode("ascii"))
 for i, mem in enumerate(memories):
-    print(f"[{i+1}] {mem['content']} | 分类: {mem['category']} | 敏感度: {mem['sensitivity']}")
+    print(f"[{i+1}] {mem['content']} | 类型: {mem.get('memory_type', 'other')} | 敏感度: {mem['sensitivity']}")
+    print(f"[{i+1}] {mem} ")

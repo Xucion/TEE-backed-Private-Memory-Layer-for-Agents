@@ -46,7 +46,6 @@ memory_type 规则：
     {{
       "content": "规范化后的长期事实",
       "memory_type": "preference | profile | health | project | instruction | other",
-      "category": "health | preference | business | other",
       "sensitivity": "high | low",
       "subject": "user",
       "predicate": "likes | dislikes | has_goal | has_health_condition | prefers_response_style | works_on_project | lives_in | works_at | has_job_search_status | prefers_language | stated_fact",
@@ -63,7 +62,6 @@ memory_type 规则：
 {conversation}
 """
 
-VALID_CATEGORIES = {"health", "preference", "business", "other"}
 VALID_SENSITIVITIES = {"high", "low"}
 QUESTION_MARKERS = {"?", "？", "吗", "么", "什么", "怎么", "怎么办", "是否", "知道", "记得"}
 REQUEST_MARKERS = {"帮我", "为我", "给我", "推荐", "建议", "做一下", "制定"}
@@ -93,6 +91,7 @@ VALID_PREDICATES = {
 }
 
 def _canonicalize_content(content: str) -> str:
+    # 输入原始记忆文本；输出第三人称规范化文本；作用是清理语气词并统一“用户”表述。
     content = content.strip()
     while content.endswith(TRAILING_PARTICLES):
         content = content[:-1].strip()
@@ -108,6 +107,7 @@ def _canonicalize_content(content: str) -> str:
 
 
 def _looks_like_user_fact(content: str) -> bool:
+    # 输入规范化文本；输出是否像长期用户事实；作用是过滤问题、临时请求和元记忆询问。
     if any(marker in content for marker in META_MEMORY_MARKERS):
         return False
     if any(marker in content for marker in QUESTION_MARKERS):
@@ -118,6 +118,7 @@ def _looks_like_user_fact(content: str) -> bool:
 
 
 def _normalize_memories(data) -> list[dict]:
+    # 输入 LLM JSON 数据；输出校验后的记忆列表；作用是规范字段并丢弃不可信候选。
     if isinstance(data, dict):
         memories = data.get("memories", [])
     elif isinstance(data, list):
@@ -137,7 +138,6 @@ def _normalize_memories(data) -> list[dict]:
         if not _looks_like_user_fact(content):
             continue
 
-        category = mem.get("category", "other")
         sensitivity = mem.get("sensitivity", "low")
         source = mem.get("source")
         memory_type = mem.get("memory_type", "other")
@@ -148,9 +148,6 @@ def _normalize_memories(data) -> list[dict]:
         slot = mem.get("slot")
         confidence = mem.get("confidence", 0.8)
 
-
-        if category not in VALID_CATEGORIES:
-            category = "other"
         if sensitivity not in VALID_SENSITIVITIES:
             sensitivity = "low"
         if source != "user":
@@ -174,7 +171,6 @@ def _normalize_memories(data) -> list[dict]:
             {
                 "content": content,
                 "memory_type": memory_type,
-                "category": category,
                 "sensitivity": sensitivity,
                 "subject": subject,
                 "predicate": predicate,
@@ -190,6 +186,7 @@ def _normalize_memories(data) -> list[dict]:
 
 llm = ChatTongyi(model=os.getenv("TONGYI_MODEL", "qwen-turbo"))
 def extract_memories(conversation: list[BaseMessage]) -> list[dict]:
+    # 输入对话消息列表；输出可存储记忆列表；作用是仅从用户消息中调用 LLM 抽取长期事实。
 
     
     # Only user-authored text is eligible for long-term memory extraction.

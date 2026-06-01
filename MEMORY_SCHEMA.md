@@ -75,7 +75,6 @@
 
   "content": "用户喜欢喝粥",
   "memory_type": "preference",
-  "category": "preference",
   "sensitivity": "low",
 
   "subject": "user",
@@ -133,17 +132,6 @@ profile
 health
 project
 instruction
-other
-```
-
-`category`
-
-粗粒度分类，可继续兼容当前项目已有分类：
-
-```text
-health
-preference
-business
 other
 ```
 

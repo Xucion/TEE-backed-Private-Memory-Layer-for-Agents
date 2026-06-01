@@ -16,6 +16,7 @@ class SecureChannelError(Exception):
 
 
 def canonical_json(data: dict[str, Any]) -> bytes:
+    # 输入 JSON 对象；输出稳定 UTF-8 字节串；作用是为签名和 HKDF transcript 固定编码。
     """为签名和 HKDF transcript 生成稳定字节串。"""
     return json.dumps(
         data,
@@ -26,10 +27,12 @@ def canonical_json(data: dict[str, Any]) -> bytes:
 
 
 def b64_encode(raw: bytes) -> str:
+    # 输入原始字节；输出 base64 字符串；作用是把二进制字段放入 JSON 消息。
     return base64.b64encode(raw).decode("ascii")
 
 
 def b64_decode(value: Any, field_name: str) -> bytes:
+    # 输入待解码值和字段名；输出原始字节；作用是校验并解码 JSON 中的 base64 字段。
     if not isinstance(value, str):
         raise SecureChannelError(f"{field_name} 必须是 base64 字符串")
     try:
@@ -39,11 +42,13 @@ def b64_decode(value: Any, field_name: str) -> bytes:
 
 
 def generate_x25519_keypair():
+    # 输入无显式参数；输出 X25519 私钥和公钥；作用是生成一次性密钥交换对。
     private_key = x25519.X25519PrivateKey.generate()
     return private_key, private_key.public_key()
 
 
 def public_key_to_b64(public_key) -> str:
+    # 输入 X25519 公钥对象；输出 raw 公钥的 base64 字符串；作用是序列化公钥用于握手。
     raw = public_key.public_bytes(
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
@@ -52,6 +57,7 @@ def public_key_to_b64(public_key) -> str:
 
 
 def public_key_from_b64(value: Any, field_name: str):
+    # 输入 base64 公钥和字段名；输出 X25519 公钥对象；作用是校验并反序列化握手公钥。
     raw = b64_decode(value, field_name)
     if len(raw) != 32:
         raise SecureChannelError(f"{field_name} 长度无效")
@@ -63,6 +69,7 @@ def derive_channel_key(
     quote: dict[str, Any],
     client_pubkey: str,
 ) -> bytes:
+    # 输入共享秘密、quote 和客户端公钥；输出 32 字节信道密钥；作用是绑定 transcript 派生 AES key。
     # 绑定 quote 和 client public key，避免会话密钥脱离刚验证的身份声明。
     transcript = {
         "purpose": "sim-ra-channel-v1",
@@ -78,6 +85,7 @@ def derive_channel_key(
 
 
 def encrypt_json(channel_key: bytes, session_id: str, payload: dict[str, Any]) -> dict[str, str]:
+    # 输入信道密钥、session_id 和明文对象；输出加密 envelope；作用是用 AES-GCM 加密 JSON payload。
     nonce = os.urandom(12)
     plaintext = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     ciphertext = AESGCM(channel_key).encrypt(
@@ -97,6 +105,7 @@ def decrypt_json(
     nonce_b64: Any,
     ciphertext_b64: Any,
 ) -> dict[str, Any]:
+    # 输入信道密钥、session_id、nonce 和密文；输出明文对象；作用是校验并解密 AES-GCM payload。
     try:
         plaintext = AESGCM(channel_key).decrypt(
             b64_decode(nonce_b64, "nonce"),

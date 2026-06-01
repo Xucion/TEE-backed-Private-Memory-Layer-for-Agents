@@ -88,7 +88,7 @@ Example:
 {
   "content": "用户有糖尿病",
   "fact_key": "health.diabetes",
-  "category": "health",
+  "memory_type": "health",
   "sensitivity": "high"
 }
 ```
@@ -106,7 +106,7 @@ Represent memory as structured facts:
   "subject": "user",
   "relation": "has_condition",
   "object": "diabetes",
-  "category": "health",
+  "memory_type": "health",
   "sensitivity": "high"
 }
 ```
