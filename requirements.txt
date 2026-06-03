@@ -3,3 +3,6 @@ langchain-community>=0.3.0
 dashscope>=1.20.0
 numpy>=1.26.0
 cryptography>=42.0.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+redis>=5.0.0
