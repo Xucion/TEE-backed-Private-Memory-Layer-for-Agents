@@ -4,11 +4,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Support running this file directly via:
-#   python "untrusted/Memory Management Commands.py"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# Support running this file directly via
+# `python src/untrusted/memory_management_commands.py`.
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from interface.vault_api import (
     VaultApiError,

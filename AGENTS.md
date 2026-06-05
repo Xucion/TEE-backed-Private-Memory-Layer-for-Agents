@@ -12,17 +12,17 @@
 
 Agent 主流程已经基本完成，项目已经从“单体本地记忆原型”推进到“Gramine direct 原型验证完成”阶段：
 
-- `untrusted/`：运行在 TEE 外部，负责对话、记忆抽取、调用外部 LLM。
-- `interface/`：TEE 外部访问 vault 的统一 API 层，屏蔽 socket 通信细节。
-- `trusted/`：计划运行在 TEE 内部，负责记忆存储、检索、隐私最小化和 vault socket 服务。
+- `src/untrusted/`：运行在 TEE 外部，负责对话、记忆抽取、调用外部 LLM。
+- `src/interface/`：TEE 外部访问 vault 的统一 API 层，屏蔽 socket 通信细节。
+- `src/trusted/`：计划运行在 TEE 内部，负责记忆存储、检索、隐私最小化和 vault socket 服务。
 
-目前代码结构已经具备 TEE 化接口边界，`trusted/vault_server.py` 已经可以通过 Gramine direct 启动。由于当前没有 SGX 硬件环境，项目暂时停留在 `gramine-direct` 阶段；`gramine-sgx`、SGX sealing 和 remote attestation 作为后续工作。
+目前代码结构已经具备 TEE 化接口边界，`src/trusted/vault_server.py` 已经可以通过 Gramine direct 启动。由于当前没有 SGX 硬件环境，项目暂时停留在 `gramine-direct` 阶段；`gramine-sgx`、SGX sealing 和 remote attestation 作为后续工作。
 
 ---
 
 ### 已完成的工作
 
-#### 1. 基础对话框架（`untrusted/chat_app.py`）
+#### 1. 基础对话框架（`src/untrusted/chat_app.py`）
 
 - 基于 **LangGraph** 构建对话图，节点为 `retrieve_memory` 和 `chatbot`。
 - 使用**通义千问**（`ChatTongyi` / `DASHSCOPE_API_KEY`）作为对话模型。
@@ -31,7 +31,7 @@ Agent 主流程已经基本完成，项目已经从“单体本地记忆原型�
 - 每轮对话结束后异步触发记忆提取和存储，不阻塞主流程。
 - 存储路径已经统一改为 `interface.vault_api.store_memories()`，不再由 agent 直接访问本地记忆文件。
 
-#### 2. 记忆提取器（`untrusted/memory_extractor.py`）——TEE 外部
+#### 2. 记忆提取器（`src/untrusted/memory_extractor.py`）——TEE 外部
 
 - 调用外部 LLM，只分析**用户原话**，过滤 AI 回复。
 - 提取客观事实或明确长期偏好。
@@ -39,7 +39,7 @@ Agent 主流程已经基本完成，项目已经从“单体本地记忆原型�
 - 包含输出校验（`_normalize_memories`），过滤格式错误、临时请求、提问句和非用户来源记忆。
 - 规范化第一人称表述，例如将“我喜欢喝粥”转换为“用户喜欢喝粥”。
 
-#### 3. Vault API（`interface/vault_api.py`）——TEE 外部接口层
+#### 3. Vault API（`src/interface/vault_api.py`）——TEE 外部接口层
 
 - 提供 `store_memories()` 和 `retrieve_context()` 两个统一入口。
 - 使用本地 socket 与 vault server 通信。
@@ -47,7 +47,7 @@ Agent 主流程已经基本完成，项目已经从“单体本地记忆原型�
 - 对响应大小、JSON 格式、错误状态和返回字段做基础校验。
 - 向上抛出 `VaultApiError`，使 agent 在 vault 不可用时可以降级为无记忆对话。
 
-#### 4. Vault Server（`trusted/vault_server.py`）——计划运行在 TEE 内部
+#### 4. Vault Server（`src/trusted/vault_server.py`）——计划运行在 TEE 内部
 
 - 已实现 socket server，暴露 `store` 和 `retrieve` 两个操作。
 - 对请求大小、动作类型、记忆字段、`top_k` 和 `threshold` 做基础校验。
@@ -55,23 +55,23 @@ Agent 主流程已经基本完成，项目已经从“单体本地记忆原型�
 - `retrieve` 路径调用 `trusted.memory_retriever.retrieve()`。
 - 在 vault 内部执行 Context Minimizer：高敏感记忆只返回类别级提示，低敏感记忆可返回原始内容。
 - 使用 `_STORE_LOCK` 保护同一进程内的存储和检索临界区。
-- 已通过 `gramine-direct trusted/vault` 成功启动，完成 Gramine direct 运行验证。
+- 已通过 `gramine-direct deployment/gramine/vault` 成功启动，完成 Gramine direct 运行验证。
 
 #### 5. Gramine Direct 接入
 
-- 已编写 `trusted/vault.manifest.template`。
-- 可通过 `gramine-manifest` 生成 `trusted/vault.manifest`。
+- 已编写 `deployment/gramine/vault.manifest.template`。
+- 可通过 `gramine-manifest` 生成 `deployment/gramine/vault.manifest`。
 - 当前启动命令：
 
 ```bash
-gramine-manifest -Dproject_dir=$(pwd) trusted/vault.manifest.template trusted/vault.manifest
-gramine-direct trusted/vault
+gramine-manifest -Dproject_dir=$(pwd) deployment/gramine/vault.manifest.template deployment/gramine/vault.manifest
+gramine-direct deployment/gramine/vault
 ```
 
 - 该阶段验证 vault server 能被 Gramine LibOS 托管运行。
 - 由于缺少 SGX 硬件，当前不继续推进 `gramine-sgx` 实测。
 
-#### 6. 记忆存储（`trusted/memory_store.py`）——已进入 Gramine direct 运行边界
+#### 6. 记忆存储（`src/trusted/memory_store.py`）——已进入 Gramine direct 运行边界
 
 - 使用 **Fernet 对称加密**将记忆加密存储到 `memories.enc`。
 - 当前密钥文件为 `memory.key`，后续迁入 SGX 时需要改为 sealing / encrypted FS / attestation provisioning 方案。
@@ -79,7 +79,7 @@ gramine-direct trusted/vault
 - 使用 numpy 计算向量相似度做去重，当前阈值为 `0.8`。
 - 记录 `embedding_model` 字段，便于将来换模型时重新编码。
 
-#### 7. 记忆检索器（`trusted/memory_retriever.py`）——已进入 Gramine direct 运行边界
+#### 7. 记忆检索器（`src/trusted/memory_retriever.py`）——已进入 Gramine direct 运行边界
 
 - 从加密存储中读取记忆，直接复用存储的向量。
 - 只对 query 做一次 embedding 编码。
@@ -93,9 +93,9 @@ gramine-direct trusted/vault
 ```text
 [TEE 外部 / untrusted]                 [TEE 内部 / trusted 目标]
 
-untrusted/chat_app.py                  trusted/vault_server.py
-untrusted/memory_extractor.py          trusted/memory_store.py
-interface/vault_api.py                 trusted/memory_retriever.py
+src/untrusted/chat_app.py                  src/trusted/vault_server.py
+src/untrusted/memory_extractor.py          src/trusted/memory_store.py
+src/interface/vault_api.py                 src/trusted/memory_retriever.py
         │                                      │
         │  store: 结构化记忆                   │
         │ ───────────────────────────────────> │  加密存储 / 向量去重
@@ -110,7 +110,7 @@ interface/vault_api.py                 trusted/memory_retriever.py
 组装 prompt → 外部 LLM API → 返回回复给用户
 ```
 
-注意：当前 vault 已经可以由 Gramine direct 托管运行，但 direct 模式不提供 SGX 硬件隔离。`trusted/` 目前代表代码和运行边界，尚不代表真实 SGX 机密性保护。
+注意：当前 vault 已经可以由 Gramine direct 托管运行，但 direct 模式不提供 SGX 硬件隔离。`src/trusted/` 目前代表代码和运行边界，尚不代表真实 SGX 机密性保护。
 
 ---
 
@@ -132,20 +132,21 @@ interface/vault_api.py                 trusted/memory_retriever.py
 
 ```text
 project/
-├── untrusted/
-│   ├── chat_app.py
-│   └── memory_extractor.py
-├── trusted/
-│   ├── memory_store.py
-│   ├── memory_retriever.py
-│   ├── vault_server.py
-│   ├── vault.manifest.template
-│   └── vault.manifest
-├── interface/
-│   └── vault_api.py
-├── decrypt.py
-├── memories.enc
-├── memory.key
+├── src/
+│   ├── client/
+│   ├── common/
+│   ├── interface/
+│   ├── trusted/
+│   └── untrusted/
+├── deployment/
+│   └── gramine/
+│       ├── vault.manifest.template
+│       └── vault.manifest
+├── docs/
+├── scripts/
+├── tests/
+├── vault_data/
+├── pyproject.toml
 ├── requirements.txt
 └── README.md
 ```

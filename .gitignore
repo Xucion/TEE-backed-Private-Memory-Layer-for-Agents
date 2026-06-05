@@ -48,7 +48,7 @@ memories.enc
 vault_data/
 
 # Gramine generated files
-trusted/vault.manifest
+deployment/gramine/vault.manifest
 *.manifest.sgx
 *.sig
 *.token

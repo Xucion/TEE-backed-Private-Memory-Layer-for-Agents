@@ -9,10 +9,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_community.chat_models import ChatTongyi
 from langgraph.graph import StateGraph, add_messages
 
-# Support running this file directly via `python untrusted/chat_app.py`.
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# Support running this file directly via `python src/untrusted/chat_app.py`.
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from interface.vault_api import (
     VaultApiError,

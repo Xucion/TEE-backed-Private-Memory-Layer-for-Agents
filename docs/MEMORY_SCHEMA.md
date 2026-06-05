@@ -617,10 +617,10 @@ retrieve 流程应当是：
 memory schema 需要服从 vault 的安全边界：
 
 - `user_id` 来自 secure request，不信任 memory payload 自带的 `user_id`。
-- `untrusted/memory_extractor.py` 只生成候选 memory。
-- `trusted/vault_server.py` 必须重新校验所有字段。
-- `trusted/memory_store.py` 负责最终规范化、去重、合并、冲突处理。
-- `trusted/memory_retriever.py` 只检索当前用户的 active memory。
+- `src/untrusted/memory_extractor.py` 只生成候选 memory。
+- `src/trusted/vault_server.py` 必须重新校验所有字段。
+- `src/trusted/memory_store.py` 负责最终规范化、去重、合并、冲突处理。
+- `src/trusted/memory_retriever.py` 只检索当前用户的 active memory。
 - `forgotten`、`expired`、`superseded` memory 默认不能参与检索。
 - 高敏感 memory 默认不原文返回给外部 LLM。
 

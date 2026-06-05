@@ -7,7 +7,7 @@ import numpy as np
 from cryptography.fernet import Fernet
 from langchain_community.embeddings import DashScopeEmbeddings
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 MEMORY_DIR = PROJECT_ROOT / "vault_data"
 

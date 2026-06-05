@@ -1,6 +1,6 @@
 # Confidential Agent Memory Vault
 
-一个具备隐私保护长期记忆能力的对话 Agent 原型。项目提供 FastAPI Agent 服务和保留的 CLI 入口，把外部 LLM 调用、短期会话和记忆抽取放在 `untrusted/`，把长期记忆的密钥管理、加密存储、向量检索、记忆生命周期管理和隐私最小化放在 `trusted/` vault 侧。
+一个具备隐私保护长期记忆能力的对话 Agent 原型。项目提供 FastAPI Agent 服务和保留的 CLI 入口，把外部 LLM 调用、短期会话和记忆抽取放在 `src/untrusted/`，把长期记忆的密钥管理、加密存储、向量检索、记忆生命周期管理和隐私最小化放在 `src/trusted/` vault 侧。
 
 当前代码已经从早期的单一全局记忆文件推进到：
 
@@ -18,8 +18,8 @@
 
 ## 当前状态
 
-- `untrusted/api_server.py` 提供 FastAPI `/chat`、`/health` 和 provisioning relay。
-- `client/vault_client.py` 在客户端本地验证模拟 RA、派生信道密钥并加密注入用户 key。
+- `src/untrusted/api_server.py` 提供 FastAPI `/chat`、`/health` 和 provisioning relay。
+- `src/client/vault_client.py` 在客户端本地验证模拟 RA、派生信道密钥并加密注入用户 key。
 - FastAPI `/chat` 只接收 `X-Vault-Capability`，不接收 `USER_MEMORY_KEY`。
 - Agent 使用 capability 调用 vault 的 `retrieve/store` 数据面。
 - 旧 CLI 仍可使用 secure session；旧版明文 `store` / `retrieve` 默认禁用。
@@ -63,8 +63,8 @@
 
 - 客户端通过 `handshake_start` 发起握手。
 - Vault 返回模拟 quote、签名、`session_id` 和 vault X25519 公钥。
-- 客户端用 `interface/sim_ra_public_key.pem` 验证 quote 签名。
-- Vault 用 `trusted/sim_ra_private_key.pem` 签名 quote。
+- 客户端用 `src/interface/sim_ra_public_key.pem` 验证 quote 签名。
+- Vault 用 `src/trusted/sim_ra_private_key.pem` 签名 quote。
 - 双方通过 X25519 计算共享秘密，并用 HKDF 派生 32 字节信道密钥。
 - 后续 secure payload 使用 AES-GCM 加密，并把 `session_id` 作为 associated data。
 - session 当前 TTL 为 300 秒。
@@ -75,7 +75,7 @@
 
 ### Vault Server
 
-`trusted/vault_server.py` 提供本地 JSON line socket 服务，默认监听 `127.0.0.1:8765`。
+`src/trusted/vault_server.py` 提供本地 JSON line socket 服务，默认监听 `127.0.0.1:8765`。
 
 支持的外层 action：
 
@@ -98,7 +98,7 @@
 
 - FastAPI 数据面不再使用 `VAULT_USER_ID` 或服务端 `USER_MEMORY_KEY`。
 - 客户端通过加密 provisioning payload 提交 `user_id` 和 Fernet key。
-- Vault 内部使用 `trusted/user_key_manager.py` 将 `user_id -> user_key` 保存在进程内存。
+- Vault 内部使用 `src/trusted/user_key_manager.py` 将 `user_id -> user_key` 保存在进程内存。
 - 每个用户对应独立密文文件：`vault_data/{user_id}.memories.enc`。
 - secure session 在第一次 provisioning 后绑定 user_id，后续不能切换用户。
 - capability 在 Vault 内绑定 user_id，数据面忽略调用者提供的 user_id。
@@ -106,7 +106,7 @@
 
 ### 记忆存储和检索
 
-`trusted/memory_store.py` 负责：
+`src/trusted/memory_store.py` 负责：
 
 - 使用用户 Fernet key 加密和解密 per-user memory 文件。
 - 为新记忆生成 `id`、时间戳、状态字段、embedding、`fact_key` 和 `conflict_key`。
@@ -117,7 +117,7 @@
 - 在加载时把过期 active 记忆标记为 `expired`。
 - 支持 soft delete，把 active 记忆标记为 `forgotten`。
 
-`trusted/memory_retriever.py` 负责：
+`src/trusted/memory_retriever.py` 负责：
 
 - 只检索 `active` 且有 embedding 的记忆。
 - 只对 query 做一次 embedding。
@@ -139,22 +139,22 @@ Vault 在返回给 Agent 前会做最小化处理：
 Client SDK
   |  本地验证模拟 RA / 派生 channel_key / 加密 user key
   v
-FastAPI relay ---------------------------------> trusted/vault_server.py
+FastAPI relay ---------------------------------> src/trusted/vault_server.py
   |  只转发 handshake 和 encrypted envelope              |
   |                                                       v
-  |<---------------- encrypted capability -------- trusted/user_key_manager.py
+  |<---------------- encrypted capability -------- src/trusted/user_key_manager.py
   |
   |  POST /chat + X-Vault-Capability
   v
-untrusted/agent_runtime.py
+src/untrusted/agent_runtime.py
   |-- Redis：短期 history
   |-- Tongyi：生成回复
   |-- capability_request(retrieve/store)
   v
-trusted/vault_server.py
+src/trusted/vault_server.py
   |
-  +--> trusted/memory_store.py
-  +--> trusted/memory_retriever.py
+  +--> src/trusted/memory_store.py
+  +--> src/trusted/memory_retriever.py
   |
   v
 vault_data/{user_id}.memories.enc
@@ -204,6 +204,7 @@ export REDIS_URL="redis://127.0.0.1:6379/0"
 export CHAT_HISTORY_TTL_SECONDS="86400"
 export VAULT_LOG_LEVEL="INFO"
 export API_LOG_LEVEL="INFO"
+export PYTHONPATH="$(pwd)/src"
 ```
 
 调试旧版明文 API 时才需要：
@@ -296,7 +297,7 @@ export DASHSCOPE_API_KEY="your_dashscope_api_key"
 export VAULT_HOST="127.0.0.1"
 export VAULT_PORT="8765"
 
-/home/xzq2628/myenv/bin/python trusted/vault_server.py
+/home/xzq2628/myenv/bin/python src/trusted/vault_server.py
 ```
 
 正常日志：
@@ -311,12 +312,12 @@ Vault 服务器正在监听 127.0.0.1:8765
 cd /home/xzq2628/confidentialAgentMemoryVault
 export DASHSCOPE_API_KEY="your_dashscope_api_key"
 
-gramine-manifest -Dproject_dir=$(pwd) trusted/vault.manifest.template trusted/vault.manifest
-gramine-direct trusted/vault
+gramine-manifest -Dproject_dir=$(pwd) deployment/gramine/vault.manifest.template deployment/gramine/vault.manifest
+gramine-direct deployment/gramine/vault
 ```
 
 `gramine-direct` 只验证 Gramine 运行兼容性，不提供真实 SGX 硬件隔离。生成的
-`trusted/vault.manifest` 可能包含 API key，不要提交或公开。
+`deployment/gramine/vault.manifest` 可能包含 API key，不要提交或公开。
 
 #### 终端 3：启动 FastAPI Agent
 
@@ -329,6 +330,7 @@ export REDIS_URL="redis://127.0.0.1:6379/0"
 
 /home/xzq2628/myenv/bin/python -m uvicorn \
   untrusted.api_server:app \
+  --app-dir src \
   --host 0.0.0.0 \
   --port 8000
 ```
@@ -368,7 +370,7 @@ sudo ufw allow from 192.168.1.0/24 to any port 8000 proto tcp
 
 ### 三、内网用户端调用
 
-用户端需要拥有项目中的 `client/`、`common/` 和 `interface/` 代码及 Python
+用户端需要拥有项目中的 `src/client/`、`src/common/` 和 `src/interface/` 代码及 Python
 依赖。进入用户端项目目录：
 
 ```bash
@@ -384,7 +386,7 @@ curl http://192.168.1.100:8000/health
 然后启动封装后的交互式客户端：
 
 ```bash
-/home/xzq2628/myenv/bin/python client/chat_cli.py \
+/home/xzq2628/myenv/bin/python src/client/chat_cli.py \
   --user alice \
   --url http://192.168.1.100:8000
 ```
@@ -414,13 +416,17 @@ curl http://192.168.1.100:8000/health
 需要继续指定的对话时，可以显式设置 session：
 
 ```bash
-/home/xzq2628/myenv/bin/python client/chat_cli.py \
+/home/xzq2628/myenv/bin/python src/client/chat_cli.py \
   --user alice \
   --session conversation-1 \
   --url http://192.168.1.100:8000
 ```
 
 在 Python 程序中调用：
+
+```bash
+export PYTHONPATH="$(pwd)/src"
+```
 
 ```python
 from client import ConfidentialAgentClient
@@ -514,7 +520,7 @@ sudo ufw status
 
 ### 七、开发兼容 CLI
 
-`untrusted/chat_app.py` 仍保留为服务器本机开发入口。它不经过远程用户端封装，
+`src/untrusted/chat_app.py` 仍保留为服务器本机开发入口。它不经过远程用户端封装，
 并使用旧的本地 secure session 模式：
 
 ```bash
@@ -523,7 +529,7 @@ export DASHSCOPE_API_KEY="your_dashscope_api_key"
 export VAULT_USER_ID="alice"
 export USER_MEMORY_KEY="existing_fernet_key"
 
-/home/xzq2628/myenv/bin/python untrusted/chat_app.py
+/home/xzq2628/myenv/bin/python src/untrusted/chat_app.py
 ```
 
 ## 记忆管理
@@ -531,7 +537,7 @@ export USER_MEMORY_KEY="existing_fernet_key"
 启动 vault 后，可以用管理命令查看或遗忘当前用户的记忆：
 
 ```bash
-/home/xzq2628/myenv/bin/python untrusted/memory_management_commands.py
+/home/xzq2628/myenv/bin/python src/untrusted/memory_management_commands.py
 ```
 
 支持命令：
@@ -549,7 +555,7 @@ exit | quit            Exit
 也可以直接解密查看当前用户记忆：
 
 ```bash
-/home/xzq2628/myenv/bin/python decrypt.py <user_id> <fernet_key>
+/home/xzq2628/myenv/bin/python scripts/decrypt_memories.py <user_id> <fernet_key>
 ```
 
 或：
@@ -557,7 +563,7 @@ exit | quit            Exit
 ```bash
 export USER_ID="default_user"
 export USER_MEMORY_KEY="a_fernet_key_for_this_user"
-/home/xzq2628/myenv/bin/python decrypt.py
+/home/xzq2628/myenv/bin/python scripts/decrypt_memories.py
 ```
 
 ## 测试
@@ -594,45 +600,32 @@ export USER_MEMORY_KEY="a_fernet_key_for_this_user"
 ## 项目文件
 
 ```text
-common/
-  sim_secure_channel.py        模拟安全信道工具：X25519、HKDF、AES-GCM、base64 编码
+src/
+  common/                      模拟安全信道共享代码
+  client/                      用户端 SDK 和交互式 CLI
+  interface/                   Vault 边界 API 和模拟 RA 公钥
+  trusted/                     Vault 服务、密钥管理、存储和检索
+  untrusted/                   Agent API、运行时和记忆抽取
 
-client/
-  agent_client.py              高级客户端：本地 key、自动 provisioning、capability 刷新和 /chat
-  chat_cli.py                  内网或远程用户使用的交互式聊天客户端
-  vault_client.py              客户端 RA 验证、信道派生和端到端 key provisioning SDK
+deployment/
+  gramine/
+    vault.manifest.template    Gramine manifest 模板
+    vault.manifest             生成产物，不提交 Git
 
-interface/
-  vault_api.py                 vault socket transport、legacy secure API 和 capability 数据面 API
-  sim_ra_public_key.pem        客户端验证模拟 quote 的公钥
+docs/
+  DESIGN.md                    架构与安全设计
+  MEMORY_SCHEMA.md             记忆数据模型
+  notes/                       问题记录
 
-trusted/
-  vault_server.py              vault socket server，处理 attestation、handshake 和 secure_request
-  user_key_manager.py          vault 进程内 per-user key 管理
-  memory_store.py              per-user 加密存储、合并、冲突、过期、遗忘
-  memory_retriever.py          active 记忆向量检索
-  vault.manifest.template      Gramine manifest 模板
-  sim_ra_private_key.pem       模拟 RA 私钥，仅用于开发原型
+scripts/
+  decrypt_memories.py          调试用解密查看脚本
+  inspect_memory_extraction.py 记忆抽取检查脚本
+  smoke_test_vault_handlers.py Vault handler 冒烟脚本
 
-untrusted/
-  api_server.py                FastAPI 路由、provisioning relay 和 /chat
-  agent_runtime.py             Redis history、LLM 和 capability retrieve/store
-  chat_app.py                  命令行对话 Agent
-  memory_extractor.py          从用户原话抽取长期记忆
-  memory_management_commands.py 记忆查看和遗忘命令
-
-tests/
-  test_memory_lifecycle.py     记忆生命周期测试
-  test_capability_security.py  session/key/capability 安全测试
-  test_agent_service_capability.py Agent capability 数据面测试
-  test_client_provisioning.py Client SDK 和 FastAPI relay 测试
-  test_high_level_client.py    高级客户端 key 持久化、聊天和 capability 刷新测试
-
-vault_data/
-  {user_id}.memories.enc       per-user 加密记忆文件，运行后生成
-
-decrypt.py                    调试用解密查看脚本
-requirements.txt              Python 依赖
+tests/                         自动化测试
+vault_data/                    per-user 加密记忆文件，运行后生成
+pyproject.toml                 测试路径配置
+requirements.txt               Python 依赖
 ```
 
 ## Gramine Direct 状态
@@ -641,8 +634,8 @@ requirements.txt              Python 依赖
 
 已支持：
 
-1. 生成 `trusted/vault.manifest`
-2. 通过 `gramine-direct trusted/vault` 启动 vault server
+1. 生成 `deployment/gramine/vault.manifest`
+2. 通过 `gramine-direct deployment/gramine/vault` 启动 vault server
 3. 从 untrusted agent 侧建立模拟 RA 安全信道并访问 vault
 
 仍需改进：

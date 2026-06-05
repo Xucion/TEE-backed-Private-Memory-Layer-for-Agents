@@ -3,10 +3,10 @@ libos.entrypoint = "/usr/local/bin/python3.12"
 
 loader.argv = [
   "/usr/local/bin/python3.12",
-  "/project/trusted/vault_server.py",
+  "/project/src/trusted/vault_server.py",
 ]
 
-loader.env.PYTHONPATH = "/project:/home/xzq2628/myenv/lib/python3.12/site-packages"
+loader.env.PYTHONPATH = "/project/src:/home/xzq2628/myenv/lib/python3.12/site-packages"
 loader.env.VIRTUAL_ENV = "/home/xzq2628/myenv"
 loader.env.PATH = "/home/xzq2628/myenv/bin:/usr/local/bin:/usr/bin:/bin"
 loader.env.VAULT_HOST = "127.0.0.1"

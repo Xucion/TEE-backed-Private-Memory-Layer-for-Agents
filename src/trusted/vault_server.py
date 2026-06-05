@@ -11,10 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Support running this file directly via `python trusted/vault_server.py`.
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# Support running this file directly via `python src/trusted/vault_server.py`.
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from common.sim_secure_channel import (
     SecureChannelError,
@@ -42,7 +43,7 @@ SIM_RA_MODE = "SIMULATED_RA_ONLY"
 SIM_RA_VAULT_ID = "confidential-agent-memory-vault"
 SIM_RA_MEASUREMENT = "confidential-agent-memory-vault-dev-v1"
 MAX_NONCE_CHARS = 128
-SIM_RA_PRIVATE_KEY_FILE = PROJECT_ROOT / "trusted" / "sim_ra_private_key.pem"
+SIM_RA_PRIVATE_KEY_FILE = SOURCE_ROOT / "trusted" / "sim_ra_private_key.pem"
 SESSION_TTL_SECONDS = 300
 
 CAPABILITY_TTL_SECONDS = 3600

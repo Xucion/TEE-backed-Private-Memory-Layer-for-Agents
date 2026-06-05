@@ -24,18 +24,18 @@
 ```text
 [TEE 外部 / untrusted 目标]
 
-untrusted/chat_app.py
+src/untrusted/chat_app.py
   - 维护对话流程
   - 调用外部聊天模型
   - 调用 memory_extractor
-  - 通过 interface/vault_api.py 访问 vault
+  - 通过 src/interface/vault_api.py 访问 vault
 
-untrusted/memory_extractor.py
+src/untrusted/memory_extractor.py
   - 调用外部 LLM
   - 只从用户原话提取长期记忆候选
   - 输出结构化 memory JSON
 
-interface/vault_api.py
+src/interface/vault_api.py
   - 建立模拟 RA + secure channel
   - 注入 user key
   - 发送 store/retrieve 请求
@@ -43,28 +43,28 @@ interface/vault_api.py
 
 [TEE 内部 / trusted 目标]
 
-trusted/vault_server.py
+src/trusted/vault_server.py
   - 接收 socket 请求
   - 处理模拟 RA、握手、安全请求
   - 校验 store/retrieve 请求
   - 执行 Context Minimizer
 
-trusted/user_key_manager.py
+src/trusted/user_key_manager.py
   - 维护进程内 per-user key
   - 校验 user_id 和 Fernet key 格式
 
-trusted/memory_store.py
+src/trusted/memory_store.py
   - 按 user_id 加密保存记忆
   - 调用 embedding 模型生成记忆向量
   - 执行相似度去重
 
-trusted/memory_retriever.py
+src/trusted/memory_retriever.py
   - 解密用户记忆
   - 调用 embedding 模型编码 query
   - 执行向量检索
 ```
 
-当前信任边界是代码结构上的边界，不等同于真实硬件隔离边界。只有在未来进入 `gramine-sgx` 并完成真实 remote attestation 后，`trusted/` 才能代表具备硬件保护的执行边界。
+当前信任边界是代码结构上的边界，不等同于真实硬件隔离边界。只有在未来进入 `gramine-sgx` 并完成真实 remote attestation 后，`src/trusted/` 才能代表具备硬件保护的执行边界。
 
 ## 3. 当前可信边界
 
@@ -72,7 +72,7 @@ trusted/memory_retriever.py
 
 ### 3.1 逻辑可信边界
 
-`trusted/` 被设计为 vault 侧可信逻辑，负责长期记忆的核心处理。`untrusted/` 不直接读写记忆文件，只能通过 `interface/vault_api.py` 调用 vault。
+`src/trusted/` 被设计为 vault 侧可信逻辑，负责长期记忆的核心处理。`src/untrusted/` 不直接读写记忆文件，只能通过 `src/interface/vault_api.py` 调用 vault。
 
 这已经建立了良好的软件架构边界：
 
@@ -99,7 +99,7 @@ direct 模式不能证明：
 - 运行中的 vault 代码没有被宿主替换。
 - 客户端连接的一定是 enclave 内部的 vault。
 - 密钥只会进入真实可信 enclave。
-- `trusted/` 具备 SGX 级别机密性或完整性。
+- `src/trusted/` 具备 SGX 级别机密性或完整性。
 
 因此，direct 模式只能作为功能验证和迁移准备，不能作为安全证明。
 
@@ -148,27 +148,27 @@ client 验证模拟 quote 字段和签名
 当前流程为：
 
 ```text
-untrusted/chat_app.py
+src/untrusted/chat_app.py
   |
   | 读取 VAULT_USER_ID
   | 读取 USER_MEMORY_KEY；如果不存在，则生成临时 Fernet key
   v
-interface/vault_api.py
+src/interface/vault_api.py
   |
   | open_user_vault_session(user_id, user_key)
   | 1. 建立模拟 RA + secure channel
   | 2. 通过 secure_provision_user_key 注入 user_key
   v
-trusted/vault_server.py
+src/trusted/vault_server.py
   |
   | 解密安全信道请求
-  | 调用 trusted/user_key_manager.py
+  | 调用 src/trusted/user_key_manager.py
   v
-trusted/user_key_manager.py
+src/trusted/user_key_manager.py
   |
   | 将 user_id -> user_key 保存在 vault 进程内存
   v
-trusted/memory_store.py / trusted/memory_retriever.py
+src/trusted/memory_store.py / src/trusted/memory_retriever.py
   |
   | 使用 user_key 加解密 vault_data/{user_id}.memories.enc
 ```
@@ -357,11 +357,11 @@ retrieve:
 
 ## 9. 当前 manifest 策略与限制
 
-当前 `trusted/vault.manifest.template` 主要用于 Gramine direct 原型。它验证了运行链路，但挂载范围仍偏宽。
+当前 `deployment/gramine/vault.manifest.template` 主要用于 Gramine direct 原型。它验证了运行链路，但挂载范围仍偏宽。
 
 当前需要注意：
 
-- 生成后的 `trusted/vault.manifest` 可能包含真实 `DASHSCOPE_API_KEY`。
+- 生成后的 `deployment/gramine/vault.manifest` 可能包含真实 `DASHSCOPE_API_KEY`。
 - 生成后的 manifest 不应提交到版本库。
 - direct 阶段挂载整个项目目录便于调试，但 SGX 阶段应收紧。
 - `/usr`、`/lib`、`/etc`、venv 等挂载范围后续需要最小化。

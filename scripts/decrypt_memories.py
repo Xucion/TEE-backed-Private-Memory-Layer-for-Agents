@@ -1,5 +1,10 @@
 import os
 import sys
+from pathlib import Path
+
+SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from trusted.memory_store import load_all_memories
 
@@ -16,7 +21,7 @@ user_key = _arg_or_env(2, "USER_MEMORY_KEY")
 
 if not user_id or not user_key:
     raise SystemExit(
-        "用法: python3 decrypt.py <user_id> <fernet_key>\n"
+        "用法: python3 scripts/decrypt_memories.py <user_id> <fernet_key>\n"
         "也可以设置 USER_ID 和 USER_MEMORY_KEY 环境变量。"
     )
 
