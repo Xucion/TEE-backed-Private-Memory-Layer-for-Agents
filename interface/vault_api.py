@@ -369,9 +369,14 @@ def provision_user_key(
         raise VaultApiError("provision_user_key 返回了无效响应")
 
     logger.info("用户记忆密钥注入完成: user_id=%s", response.get("user_id"))
+    capability = response.get("capability")
+    if not isinstance(capability, str) or not capability:
+        raise VaultApiError("provision_user_key 返回了无效 capability")
     return {
         "user_id": response.get("user_id"),
         "user_key": user_key_text,
+        "capability": capability,
+        "expires_in": response.get("expires_in"),
     }
 
 
@@ -385,6 +390,7 @@ def open_user_vault_session(
     provisioned = provision_user_key(session, user_id, user_key)
     session["user_id"] = provisioned["user_id"]
     session["user_key"] = provisioned["user_key"]
+    session["capability"] = provisioned["capability"]
     logger.info("用户 vault session 初始化完成: user_id=%s session_id=%s", session["user_id"], session["session_id"][:8])
     return session
 
@@ -475,3 +481,64 @@ def secure_forget_user_memories(
     if not isinstance(forgotten_count, int):
         raise VaultApiError("Vault 服务器返回了无效的 forgotten_count")
     return forgotten_count
+
+
+def _send_capability_request(
+    capability: str,
+    operation: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    # 输入 capability、操作名和业务负载；输出 vault data；作用是使用 bearer capability 调用 Agent 数据面。
+    if not capability:
+        raise VaultApiError("capability 不能为空")
+    return _send_request(
+        {
+            "action": "capability_request",
+            "operation": operation,
+            "capability": capability,
+            **payload,
+        }
+    )
+
+
+def store_memories_with_capability(
+    capability: str,
+    memories: list[dict[str, Any]],
+) -> int:
+    # 输入 capability 和记忆列表；输出存储数量；作用是让 Agent 在不知道用户 key 时写入长期记忆。
+    data = _send_capability_request(
+        capability,
+        "store",
+        {"memories": memories},
+    )
+    stored_count = data.get("stored_count", 0)
+    if not isinstance(stored_count, int):
+        raise VaultApiError("Vault 服务器返回了无效的 stored_count")
+    return stored_count
+
+
+def retrieve_context_with_capability(
+    capability: str,
+    query: str,
+    top_k: int = 3,
+    threshold: float = 0.4,
+) -> str:
+    # 输入 capability、查询和检索参数；输出最小化上下文；作用是让 Agent 无需用户 key 检索长期记忆。
+    data = _send_capability_request(
+        capability,
+        "retrieve",
+        {
+            "query": query,
+            "top_k": top_k,
+            "threshold": threshold,
+        },
+    )
+    memory_context = data.get("memory_context", "")
+    if not isinstance(memory_context, str):
+        raise VaultApiError("Vault 服务器返回了无效的 memory_context")
+    return memory_context
+
+
+def relay_vault_request(request: dict[str, Any]) -> dict[str, Any]:
+    # 输入客户端构造的握手或加密 envelope；输出 vault data；作用是让 HTTP 层不解密地转发请求。
+    return _send_request(request)

@@ -1,4 +1,5 @@
 import re
+import secrets
 import threading
 
 from cryptography.fernet import Fernet
@@ -57,6 +58,9 @@ def provision_user_key(user_id: object, user_key: object) -> str:
     normalized_key = _normalize_fernet_key(user_key)
 
     with _USER_KEYS_LOCK:
+        existing_key = _USER_KEYS.get(normalized_user_id)
+        if existing_key is not None and not secrets.compare_digest(existing_key, normalized_key):
+            raise UserKeyError("该 user_id 已绑定不同密钥，拒绝覆盖")
         _USER_KEYS[normalized_user_id] = normalized_key
 
     return normalized_user_id

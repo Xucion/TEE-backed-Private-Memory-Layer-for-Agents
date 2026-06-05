@@ -1,5 +1,6 @@
 import os
 import json
+import threading
 from langchain_community.chat_models import ChatTongyi
 from langchain_core.messages import HumanMessage, BaseMessage
 
@@ -184,7 +185,24 @@ def _normalize_memories(data) -> list[dict]:
 
     return normalized
 
-llm = ChatTongyi(model=os.getenv("TONGYI_MODEL", "qwen-turbo"))
+_EXTRACTOR_LLM: ChatTongyi | None = None
+_EXTRACTOR_LLM_LOCK = threading.Lock()
+
+
+def _get_extractor_llm() -> ChatTongyi:
+    # 输入环境中的模型配置；输出共享 extractor LLM；作用是避免模块导入时提前初始化外部客户端。
+    global _EXTRACTOR_LLM
+    if _EXTRACTOR_LLM is not None:
+        return _EXTRACTOR_LLM
+
+    with _EXTRACTOR_LLM_LOCK:
+        if _EXTRACTOR_LLM is None:
+            _EXTRACTOR_LLM = ChatTongyi(
+                model=os.getenv("TONGYI_MODEL", "qwen-turbo")
+            )
+        return _EXTRACTOR_LLM
+
+
 def extract_memories(conversation: list[BaseMessage]) -> list[dict]:
     # 输入对话消息列表；输出可存储记忆列表；作用是仅从用户消息中调用 LLM 抽取长期事实。
 
@@ -200,7 +218,7 @@ def extract_memories(conversation: list[BaseMessage]) -> list[dict]:
     
     prompt = EXTRACTOR_PROMPT.format(conversation="\n".join(user_lines))
     try:
-        response = llm.invoke([HumanMessage(content=prompt)])
+        response = _get_extractor_llm().invoke([HumanMessage(content=prompt)])
         text = response.content.strip()
         text = text.replace("```json", "").replace("```", "").strip()
         data = json.loads(text)

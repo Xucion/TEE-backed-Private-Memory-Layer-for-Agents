@@ -45,6 +45,12 @@ MAX_NONCE_CHARS = 128
 SIM_RA_PRIVATE_KEY_FILE = PROJECT_ROOT / "trusted" / "sim_ra_private_key.pem"
 SESSION_TTL_SECONDS = 300
 
+CAPABILITY_TTL_SECONDS = 3600
+MAX_ACTIVE_SESSIONS = 10000
+MAX_ACTIVE_CAPABILITIES = 10000
+_CAPABILITIES: dict[str, dict[str, Any]] = {}
+_CAPABILITY_LOCK = threading.Lock()
+
 _STORE_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
 _SESSIONS: dict[str, dict[str, Any]] = {}
@@ -222,6 +228,48 @@ def _get_session_key(session_id: Any) -> bytes:
             raise VaultError("安全信道 session 已过期")
 
         return session["channel_key"]
+
+
+def _get_bound_session_user_id(session_id: str) -> str:
+    # 输入 session_id；输出 session 绑定的 user_id；作用是阻止安全会话切换到其他用户。
+    _get_session_key(session_id)
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(session_id)
+        if session is None:
+            raise VaultError("安全信道 session 不存在或已过期")
+        user_id = session.get("user_id")
+        if not isinstance(user_id, str) or not user_id:
+            raise VaultError("安全信道 session 尚未绑定用户")
+        return user_id
+
+
+def _assert_session_can_bind_user(session_id: str, requested_user_id: Any) -> None:
+    # 输入 session_id 和待注入 user_id；输出无返回值；作用是在写 key 前阻止已绑定 session 切换用户。
+    _get_session_key(session_id)
+    if not isinstance(requested_user_id, str) or not requested_user_id.strip():
+        raise VaultError("user_id 必须是非空字符串")
+    normalized_user_id = requested_user_id.strip()
+
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(session_id)
+        if session is None:
+            raise VaultError("安全信道 session 不存在或已过期")
+        bound_user_id = session.get("user_id")
+        if bound_user_id is not None and bound_user_id != normalized_user_id:
+            raise VaultError("session 已绑定其他用户")
+
+
+def _purge_expired_capabilities(now: float | None = None) -> None:
+    # 输入可选当前时间；输出无返回值；作用是清理过期 capability 并限制内存增长。
+    current_time = now or time.time()
+    with _CAPABILITY_LOCK:
+        expired_tokens = [
+            token
+            for token, record in _CAPABILITIES.items()
+            if current_time >= float(record["expires_at"])
+        ]
+        for token in expired_tokens:
+            _CAPABILITIES.pop(token, None)
 
 
 def _decrypt_secure_payload(session_id: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -483,6 +531,15 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
         channel_key = derive_channel_key(shared_secret, quote, str(client_pubkey_b64))
 
         with _SESSION_LOCK:
+            expired_session_ids = [
+                existing_session_id
+                for existing_session_id, session in _SESSIONS.items()
+                if time.time() - float(session["created_at"]) > SESSION_TTL_SECONDS
+            ]
+            for expired_session_id in expired_session_ids:
+                _SESSIONS.pop(expired_session_id, None)
+            if len(_SESSIONS) >= MAX_ACTIVE_SESSIONS:
+                raise VaultError("安全信道 session 数量已达上限")
             _SESSIONS[session_id] = {
                 "channel_key": channel_key,
                 "created_at": time.time(),
@@ -534,21 +591,55 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
         if payload.get("action") != "provision_user_key":
             raise VaultError("安全信道明文 action 无效")
 
+        _assert_session_can_bind_user(session_id, payload.get("user_id"))
         try:
-            user_id = provision_user_key(payload.get("user_id"), payload.get("user_key"))
+            user_id = provision_user_key(
+                payload.get("user_id"),
+                payload.get("user_key"),
+            )
         except UserKeyError as exc:
             raise VaultError(str(exc)) from exc
 
         logger.info("用户密钥注入完成: session_id=%s user_id=%s", session_id[:8], user_id)
+        capability = _bind_user_and_issue_capability(session_id, user_id)
+
         return _success(
             _encrypt_secure_payload(
                 session_id,
                 {
                     "status": "ok",
                     "user_id": user_id,
+                    "capability": capability,
+                    "expires_in": CAPABILITY_TTL_SECONDS,
                 },
             )
         )
+
+    if action == "capability_request":
+        operation = str(request.get("operation", ""))
+        user_id = _resolve_capability(
+            request.get("capability"),
+            operation,
+        )
+
+        bound_request = {
+            **request,
+            "user_id": user_id,
+        }
+
+        if operation == "retrieve":
+            data = _handle_retrieve_data(bound_request)
+        elif operation == "store":
+            data = _handle_store_data(bound_request)
+        elif operation == "list_memories":
+            data = _handle_list_memories_data(bound_request)
+        elif operation == "forget":
+            data = _handle_forget_data(bound_request)
+        else:
+            raise VaultError("不支持的 capability operation")
+
+        return _success(data)
+
 
     if action == "secure_request":
         session_id = request.get("session_id")
@@ -557,6 +648,7 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
 
         logger.info("收到 secure_request: session_id=%s", session_id[:8])
         payload = _decrypt_secure_payload(session_id, request)
+        payload["user_id"] = _get_bound_session_user_id(session_id)
         inner_action = payload.get("action")
         logger.info("secure_request 内部操作: session_id=%s inner_action=%s", session_id[:8], inner_action)
         if inner_action == "store":
@@ -567,7 +659,6 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
             data = _handle_forget_data(payload)
         elif inner_action == "list_memories":
             data = _handle_list_memories_data(payload)
-            
         else:
             raise VaultError(f"secure_request 不支持的内部操作: {inner_action}")
 
@@ -626,6 +717,52 @@ def run_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
         logger.info("Vault 服务器正在监听 %s:%s", host, port)
         server.serve_forever()
 
+
+def _bind_user_and_issue_capability(session_id: str, user_id: str) -> str:
+    # 输入 session_id 和 user_id；输出 bearer capability；作用是绑定会话用户并授予 Agent 数据面权限。
+    _get_session_key(session_id)
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(session_id)
+        if session is None:
+            raise VaultError("session 不存在")
+
+        bound_user_id = session.get("user_id")
+        if bound_user_id is not None and bound_user_id != user_id:
+            raise VaultError("session 已绑定其他用户")
+
+        session["user_id"] = user_id
+
+    capability = secrets.token_urlsafe(32)
+
+    _purge_expired_capabilities()
+    with _CAPABILITY_LOCK:
+        if len(_CAPABILITIES) >= MAX_ACTIVE_CAPABILITIES:
+            raise VaultError("capability 数量已达上限")
+        _CAPABILITIES[capability] = {
+            "user_id": user_id,
+            "expires_at": time.time() + CAPABILITY_TTL_SECONDS,
+            "scopes": {"store", "retrieve"},
+        }
+
+    return capability
+
+
+def _resolve_capability(token: Any, required_scope: str) -> str:
+    # 输入 capability 和所需权限；输出绑定 user_id；作用是校验 bearer token、期限和 scope。
+    if not isinstance(token, str) or not token:
+        raise VaultError("缺少 capability")
+
+    _purge_expired_capabilities()
+    with _CAPABILITY_LOCK:
+        record = _CAPABILITIES.get(token)
+
+        if record is None:
+            raise VaultError("capability 无效")
+
+        if required_scope not in record["scopes"]:
+            raise VaultError("capability 权限不足")
+
+        return str(record["user_id"])
 
 def main() -> None:
     # 输入环境变量中的监听配置；输出无返回值；作用是作为 vault server 命令行入口。

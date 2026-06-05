@@ -6,10 +6,16 @@ __pycache__/
 *.pyd
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .pytest_cache/
+.hypothesis/
 .mypy_cache/
+.dmypy.json
+dmypy.json
 .ruff_cache/
+.cache/
+.ipynb_checkpoints/
 .tox/
 .nox/
 build/
@@ -20,16 +26,26 @@ dist/
 .venv/
 venv/
 env/
+.direnv/
 
 # Local environment, runtime state, and secrets
 .env
 .env.*
 !.env.example
+*.key
+*.p12
+*.pfx
 *.log
+*.pid
 *.tmp
 *.sock
-memory.key
+*.bak
+*.swp
+*~
 memories.enc
+
+# Per-user vault state generated at runtime
+vault_data/
 
 # Gramine generated files
 trusted/vault.manifest
