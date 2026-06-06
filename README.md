@@ -2,6 +2,8 @@
 
 一个具备隐私保护长期记忆能力的对话 Agent 原型。项目提供 FastAPI Agent 服务和保留的 CLI 入口，把外部 LLM 调用、短期会话和记忆抽取放在 `src/untrusted/`，把长期记忆的密钥管理、加密存储、向量检索、记忆生命周期管理和隐私最小化放在 `src/trusted/` vault 侧。
 
+欢迎联系讨论。
+
 当前代码已经从早期的单一全局记忆文件推进到：
 
 - per-user 记忆文件：`vault_data/{user_id}.memories.enc`
