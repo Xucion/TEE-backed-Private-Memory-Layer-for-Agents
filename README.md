@@ -1,19 +1,17 @@
 # Confidential Agent Memory Vault
 
-## WeChat Activity Report Pipeline
+## 微信活动报告流水线
 
-`src/tools/` contains a standalone WeChat activity report pipeline for turning a
-JSON WeChat export into a shareable activity/todo report. It is independent from
-the Agent/Vault runtime and does not read or modify vault memory files.
+`src/tools/` 中包含一套独立的微信活动报告工具链，可以把微信 JSON 导出目录转换为适合分享的活动/待办报告。该工具链独立于 Agent/Vault 运行时，不读取也不修改 vault 记忆文件。
 
-One-command usage from the project root:
+在项目根目录一键生成：
 
 ```powershell
 python .\src\tools\build_wechat_activity_report.py `
   --input .\src\tools\wechatOutput\wechat_chat_xunxu_2026-06-07_json
 ```
 
-Default outputs in the export directory:
+默认会在导出目录下生成：
 
 ```text
 normalized_messages.jsonl
@@ -24,42 +22,39 @@ weekly_activity_summary.html
 weekly_activity_summary.pdf
 ```
 
-Only the extraction step calls an external LLM:
+只有活动提取步骤会调用外部大模型：
 
 ```text
-normalize_wechat_export.py      local only
-extract_wechat_activities.py    calls Tongyi/Qwen via DashScope
-summarize_wechat_activities.py  local only
-render_wechat_summary.py        local only
+normalize_wechat_export.py      仅本地处理
+extract_wechat_activities.py    通过 DashScope 调用通义千问/Qwen
+summarize_wechat_activities.py  仅本地处理
+render_wechat_summary.py        仅本地处理
 ```
 
-By default, likely chat-only time windows are filtered before LLM extraction:
+默认会在调用大模型前过滤疑似闲聊的时间段：
 
 ```text
 minimum_score = 0.3
 include_all = false
 ```
 
-Useful safety/debug options:
+常用安全和调试选项：
 
 ```powershell
-# Reuse an existing extracted_activities.jsonl; do not call the LLM.
+# 复用已有 extracted_activities.jsonl，不调用大模型。
 python .\src\tools\build_wechat_activity_report.py `
   --input .\src\tools\wechatOutput\wechat_chat_xunxu_2026-06-07_json `
   --skip-extract
 
-# Generate LLM request payloads for inspection; do not call the LLM.
+# 只生成待发送给大模型的 payload，便于人工检查，不调用大模型。
 python .\src\tools\build_wechat_activity_report.py `
   --input .\src\tools\wechatOutput\wechat_chat_xunxu_2026-06-07_json `
   --dry-run-llm
 ```
 
-Images are not OCRed or analyzed by a vision model. The tools only record image
-metadata and associate images with nearby text by `context_group_id`. Rendered
-HTML embeds related images as base64 data URIs, and the generated PDF includes
-the images, so the PDF is the recommended file to share in a group chat.
+图片不会做 OCR，也不会交给视觉模型分析。工具只记录图片元信息，并通过 `context_group_id` 将图片和相近时间段的文本关联起来。渲染出的 HTML 会把相关图片以内嵌 base64 的形式写入，生成的 PDF 也会包含图片，因此推荐将 PDF 作为最终发群文件。
 
-Detailed documentation is in `src/tools/wechat_normalizer/README.md`.
+详细说明见 `src/tools/wechat_normalizer/README.md`。
 
 一个具备隐私保护长期记忆能力的对话 Agent 原型。项目提供 FastAPI Agent 服务和保留的 CLI 入口，把外部 LLM 调用、短期会话和记忆抽取放在 `src/untrusted/`，把长期记忆的密钥管理、加密存储、向量检索、记忆生命周期管理和隐私最小化放在 `src/trusted/` vault 侧。
 
