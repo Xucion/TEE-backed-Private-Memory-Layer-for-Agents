@@ -75,17 +75,18 @@ class AgentService:
             raise AgentServiceError("Agent service has not started")
         return self._llm
 
-    def _capability_subject(self, capability: str) -> str:
+    def _capability_subject(self, capability: str | None) -> str:
         # 输入 bearer capability；输出不可逆短指纹；作用是隔离 Redis history 而不保存 capability 原文。
-        return hashlib.sha256(capability.encode("utf-8")).hexdigest()
+        token = capability or "no-vault"
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    def _history_key(self, capability: str, session_id: str) -> str:
+    def _history_key(self, capability: str | None, session_id: str) -> str:
         # 输入 capability 和会话 ID；输出 Redis key；作用是按 capability 身份隔离短期对话历史。
         return f"chat:{self._capability_subject(capability)}:{session_id}:history"
 
     def _load_history(
         self,
-        capability: str,
+        capability: str | None,
         session_id: str,
     ) -> list[dict[str, str]]:
         # 输入 capability 和会话 ID；输出清洗后的历史；作用是从 Redis 读取当前用户短期对话。
@@ -123,7 +124,7 @@ class AgentService:
 
     def _save_history(
         self,
-        capability: str,
+        capability: str | None,
         session_id: str,
         history: list[dict[str, str]],
     ) -> None:
@@ -165,7 +166,7 @@ class AgentService:
 
     def generate_reply(
         self,
-        capability: str,
+        capability: str | None,
         session_id: str,
         user_message: str,
     ) -> dict[str, object]:
@@ -190,16 +191,17 @@ class AgentService:
             }
 
         memory_context = ""
-        try:
-            memory_context = retrieve_context_with_capability(
-                capability,
-                user_message,
-                top_k=3,
-                threshold=0.4,
-            )
-        except VaultApiError:
-            logger.exception("Vault capability retrieval failed; continuing without memory context")
-            memory_context = ""
+        if capability:
+            try:
+                memory_context = retrieve_context_with_capability(
+                    capability,
+                    user_message,
+                    top_k=3,
+                    threshold=0.4,
+                )
+            except VaultApiError:
+                logger.exception("Vault capability retrieval failed; continuing without memory context")
+                memory_context = ""
 
         history = self._load_history(capability, session_id)
         messages = self._build_messages(
@@ -231,10 +233,12 @@ class AgentService:
 
     def store_memory_background(
         self,
-        capability: str,
+        capability: str | None,
         user_message: str,
     ) -> None:
         # 输入 capability 和用户消息；输出无返回值；作用是后台抽取并以 capability 写入长期记忆。
+        if not capability:
+            return
         try:
             memories = extract_memories(
                 [HumanMessage(content=user_message)]

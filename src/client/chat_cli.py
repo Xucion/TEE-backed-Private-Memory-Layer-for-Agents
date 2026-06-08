@@ -32,6 +32,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--key-file",
         help="用户 Fernet key 文件；默认保存在 ~/.config/confidential-agent-memory-vault/keys/",
     )
+    parser.add_argument(
+        "--no-vault",
+        action="store_true",
+        help="开发模式：不初始化 vault，不使用长期记忆，只进行普通聊天和可用工具调用。",
+    )
     return parser
 
 
@@ -44,6 +49,7 @@ def main() -> None:
             api_base_url=args.url,
             session_id=args.session,
             key_file=args.key_file,
+            allow_no_vault=args.no_vault,
         )
         client.provision()
     except AgentClientError as exc:
@@ -51,7 +57,10 @@ def main() -> None:
 
     print(f"已连接 Agent，user_id={client.user_id}")
     print(f"session_id={client.session_id}")
-    print(f"用户密钥文件: {client.key_file}")
+    if client._no_vault_mode:
+        print("Vault 未启用：当前为无长期记忆模式。")
+    else:
+        print(f"用户密钥文件: {client.key_file}")
     print("输入 exit 或 quit 退出。")
 
     while True:

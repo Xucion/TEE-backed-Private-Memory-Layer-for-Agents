@@ -137,6 +137,37 @@ def test_agent_service_wechat_report_tool_route() -> None:
         agent_runtime.try_handle_wechat_activity_report = original_tool
 
 
+def test_agent_service_without_vault_capability_degrades_to_chat() -> None:
+    service = AgentService("redis://unused", "unused")
+    fake_redis = FakeRedis()
+    service._redis = fake_redis
+    service._llm = FakeLlm()
+
+    original_retrieve = agent_runtime.retrieve_context_with_capability
+    original_tool = agent_runtime.try_handle_wechat_activity_report
+
+    try:
+        calls: list[str] = []
+
+        def fake_retrieve(token: str, query: str, top_k: int, threshold: float) -> str:
+            calls.append(token)
+            return "should not happen"
+
+        agent_runtime.retrieve_context_with_capability = fake_retrieve
+        agent_runtime.try_handle_wechat_activity_report = lambda message: None
+
+        result = service.generate_reply(None, "conversation-no-vault", "你好")
+
+        _assert(result["reply"] == "测试回复", "no-vault chat did not return LLM reply")
+        _assert(result["memory_context_used"] is False, "no-vault chat should not use memory context")
+        _assert(calls == [], "no-vault chat should not call vault retrieval")
+        _assert(bool(fake_redis.values), "no-vault chat did not save short-term history")
+    finally:
+        agent_runtime.retrieve_context_with_capability = original_retrieve
+        agent_runtime.try_handle_wechat_activity_report = original_tool
+
+
 if __name__ == "__main__":
     test_agent_service_capability()
     test_agent_service_wechat_report_tool_route()
+    test_agent_service_without_vault_capability_degrades_to_chat()

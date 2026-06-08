@@ -36,11 +36,14 @@ class ConfidentialAgentClient:
         key_file: str | Path | None = None,
         user_key: bytes | str | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        allow_no_vault: bool = False,
     ) -> None:
         self.user_id = self._validate_user_id(user_id)
         self.api_base_url = api_base_url.rstrip("/")
         self.session_id = session_id or f"conversation-{secrets.token_hex(8)}"
         self.timeout_seconds = timeout_seconds
+        self.allow_no_vault = bool(allow_no_vault)
+        self._no_vault_mode = False
         self.key_file = Path(key_file).expanduser() if key_file else self.default_key_file(self.user_id)
 
         self.user_key = self._resolve_user_key(user_key)
@@ -146,7 +149,10 @@ class ConfidentialAgentClient:
             raise AgentClientError("Agent 返回了非对象响应")
         return data
 
-    def provision(self, force: bool = False) -> ProvisionedVaultAccess:
+    def provision(self, force: bool = False) -> ProvisionedVaultAccess | None:
+        if self._no_vault_mode:
+            return None
+
         now = time.monotonic()
         if (
             not force
@@ -161,6 +167,11 @@ class ConfidentialAgentClient:
                 self.user_key,
             )
         except VaultClientError as exc:
+            if self.allow_no_vault:
+                self._no_vault_mode = True
+                self._access = None
+                self._capability_expires_at = 0.0
+                return None
             raise AgentClientError(
                 f"Vault 初始化失败；请确认服务已启动，并确认密钥文件正确: {self.key_file}"
             ) from exc
@@ -180,6 +191,7 @@ class ConfidentialAgentClient:
 
         for attempt in range(2):
             access = self.provision(force=attempt > 0)
+            headers = {"X-Vault-Capability": access.capability} if access is not None else {}
             try:
                 response = self._post_json(
                     "/chat",
@@ -187,11 +199,11 @@ class ConfidentialAgentClient:
                         "session_id": self.session_id,
                         "message": message,
                     },
-                    {
-                        "X-Vault-Capability": access.capability,
-                    },
+                    headers,
                 )
             except AgentClientError:
+                if self._no_vault_mode:
+                    raise
                 if attempt == 0:
                     continue
                 raise

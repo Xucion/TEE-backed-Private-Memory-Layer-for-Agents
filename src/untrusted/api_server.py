@@ -97,9 +97,9 @@ def chat(
     payload: ChatRequest,
     request: Request,
     background_tasks: BackgroundTasks,
-    vault_capability: str = Header(
+    vault_capability: str | None = Header(
+        default=None,
         alias="X-Vault-Capability",
-        min_length=32,
         max_length=512,
     ),
 ) -> ChatResponse:
@@ -115,10 +115,11 @@ def chat(
     except AgentServiceError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    background_tasks.add_task(
-        service.store_memory_background,
-        vault_capability,
-        payload.message,
-    )
+    if vault_capability:
+        background_tasks.add_task(
+            service.store_memory_background,
+            vault_capability,
+            payload.message,
+        )
 
     return ChatResponse(**result)

@@ -12,7 +12,7 @@ if str(SOURCE_ROOT) not in sys.path:
 
 
 from client.agent_client import AgentClientError, ConfidentialAgentClient
-from client.vault_client import ProvisionedVaultAccess
+from client.vault_client import ProvisionedVaultAccess, VaultClientError
 
 
 class FakeProvisioningClient:
@@ -27,6 +27,11 @@ class FakeProvisioningClient:
             capability=f"capability-{self.calls}",
             expires_in=3600,
         )
+
+
+class FailingProvisioningClient:
+    def provision(self, user_id: str, user_key: bytes) -> ProvisionedVaultAccess:
+        raise VaultClientError("vault unavailable")
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -88,5 +93,33 @@ def test_high_level_client() -> None:
         print("high-level client OK")
 
 
+def test_high_level_client_no_vault_mode() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        client = ConfidentialAgentClient(
+            user_id="alice",
+            api_base_url="http://unused",
+            session_id="conversation-no-vault",
+            key_file=Path(temp_dir) / "alice.key",
+            allow_no_vault=True,
+        )
+        client._provisioning_client = FailingProvisioningClient()
+
+        seen_headers: list[dict] = []
+
+        def successful_post(path, payload, headers=None):
+            seen_headers.append(headers or {})
+            return {"reply": f"无 vault: {payload['message']}"}
+
+        client._post_json = successful_post
+        reply = client.chat("你好")
+
+        _assert(reply == "无 vault: 你好", "no-vault client did not return chat reply")
+        _assert(client._no_vault_mode is True, "client did not enter no-vault mode")
+        _assert(seen_headers == [{}], "no-vault client should not send capability header")
+
+        print("high-level client no-vault OK")
+
+
 if __name__ == "__main__":
     test_high_level_client()
+    test_high_level_client_no_vault_mode()
