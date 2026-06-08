@@ -77,12 +77,12 @@ route_intent -> parse_request -> resolve_contact -> build_report -> final_respon
 GET /api/chat/contacts?keyword=<对象名>&include_friends=true&include_groups=false&include_officials=false
 ```
 
-内网部署时可通过环境变量配置外部微信导出工具：
+内网部署时可通过环境变量配置外部微信导出工具，地址和路径按实际环境替换：
 
 ```bash
-export WECHAT_EXPORT_API_BASE="http://10.1.151.71:10392"
+export WECHAT_EXPORT_API_BASE="http://<WECHAT_WINDOWS_HOST>:10392"
 export WECHAT_REPORT_OUTPUT_ROOT="src/tools/wechatOutput"
-export WECHAT_EXPORT_BACKEND_OUTPUT_DIR="D:\\srcVersionWechatAnalysis\\WeChatDataAnalysis\\exports"
+export WECHAT_EXPORT_BACKEND_OUTPUT_DIR="<WECHAT_BACKEND_EXPORT_DIR>"
 ```
 
 一个具备隐私保护长期记忆能力的对话 Agent 原型。项目提供 FastAPI Agent 服务和保留的 CLI 入口，把外部 LLM 调用、短期会话和记忆抽取放在 `src/untrusted/`，把长期记忆的密钥管理、加密存储、向量检索、记忆生命周期管理和隐私最小化放在 `src/trusted/` vault 侧。
@@ -304,40 +304,59 @@ export VAULT_ALLOW_LEGACY_PLAINTEXT="1"
 
 ## 运行项目
 
-下面以两台内网机器为例：
+项目推荐拆成两个运行角色：
 
-- 服务器：运行 Redis、Vault 和 FastAPI Agent。
-- 用户端：运行封装后的聊天客户端。
-- 服务器内网地址示例：`192.168.1.100`。
+- Windows 机器：运行 `externalAPI/WeChatDataAnalysis`，访问本机微信数据，并提供微信导出 HTTP API。
+- Linux/Ubuntu 服务器：运行 Redis、Vault、FastAPI Agent 和聊天客户端；如果需要 Gramine/SGX，也在这一侧运行。
 
-服务器只需向内网开放 FastAPI 的 `8000` 端口。Redis 的 `6379` 和 Vault 的
-`8765` 必须只允许服务器本机访问。
+如果只测试普通聊天，可以不启动 Windows 微信导出工具。如果要让 Agent 通过对话生成微信活动报告，则必须让 Ubuntu 侧能访问 Windows 侧的 WeChatDataAnalysis API。
 
-### 一、服务器端首次准备
+### 一、Windows：启动微信导出工具
 
-进入项目目录并配置 DashScope：
+在 Windows 上启动 `externalAPI/WeChatDataAnalysis`。具体启动方式以该外部工具自己的文档为准，项目内常见入口是：
+
+```powershell
+cd <PROJECT_DIR>\externalAPI\WeChatDataAnalysis
+.\start-dev.cmd
+```
+
+确认本机服务正常：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:10392/api/health
+```
+
+然后确认 Ubuntu 服务器能访问 Windows 的内网地址：
 
 ```bash
-cd /home/xzq2628/confidentialAgentMemoryVault
-export DASHSCOPE_API_KEY="your_dashscope_api_key"
+curl http://<WECHAT_WINDOWS_HOST>:10392/api/health
 ```
 
-项目使用的 Python：
+如果访问失败，通常需要检查 Windows 防火墙、服务监听地址和两台机器是否处于同一内网。
 
-```text
-/home/xzq2628/myenv/bin/python
-```
+### 二、Ubuntu：准备公共环境
 
-确认依赖已经安装：
+进入项目目录并配置基础环境：
 
 ```bash
-/home/xzq2628/myenv/bin/python -m pip install -r requirements.txt
+cd <PROJECT_DIR>
+export PYTHONPATH="$(pwd)/src"
+export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
 ```
 
-#### 首次创建 Redis 容器
+确认 Python 依赖已经安装：
 
-当前服务器环境推荐让 Redis 容器使用 host network，但明确限制 Redis 只监听
-`127.0.0.1`：
+```bash
+<PYTHON> -m pip install -r requirements.txt
+```
+
+其中 `<PYTHON>` 可以是系统 Python、虚拟环境 Python 或 Conda 环境 Python。
+
+### 三、Ubuntu：启动 Redis
+
+Agent 服务需要 Redis 保存短期会话历史。可以使用本机 Redis，也可以用 Docker。无论采用哪种方式，Redis 都建议只监听 `127.0.0.1`。
+
+Docker 示例：
 
 ```bash
 docker run -d \
@@ -347,150 +366,108 @@ docker run -d \
   redis-server --bind 127.0.0.1 --protected-mode yes
 ```
 
-该命令只在首次创建容器时执行。以后再次执行会出现
-`container name "/camv-redis" is already in use`，这表示容器已经存在，应改用
-`docker start`。
-
-检查 Redis：
-
-```bash
-docker exec camv-redis redis-cli ping
-```
-
-正常结果：
-
-```text
-PONG
-```
-
-### 二、服务器端启动
-
-每次运行项目使用三个终端，按以下顺序启动。
-
-#### 终端 1：启动 Redis
+已经创建过容器时，直接启动：
 
 ```bash
 docker start camv-redis
 docker exec camv-redis redis-cli ping
 ```
 
-如果 `docker start` 提示容器已经运行，可以直接忽略。
+正常应返回 `PONG`。
 
-#### 终端 2：启动 Vault
+### 四、Ubuntu：启动 Vault
 
 普通 Python 模式：
 
 ```bash
-cd /home/xzq2628/confidentialAgentMemoryVault
-export DASHSCOPE_API_KEY="your_dashscope_api_key"
+cd <PROJECT_DIR>
+export PYTHONPATH="$(pwd)/src"
+export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
 export VAULT_HOST="127.0.0.1"
 export VAULT_PORT="8765"
 
-/home/xzq2628/myenv/bin/python src/trusted/vault_server.py
+<PYTHON> src/trusted/vault_server.py
 ```
 
-正常日志：
-
-```text
-Vault 服务器正在监听 127.0.0.1:8765
-```
-
-也可以使用 Gramine direct 启动 Vault：
+也可以用 Gramine direct 启动：
 
 ```bash
-cd /home/xzq2628/confidentialAgentMemoryVault
-export DASHSCOPE_API_KEY="your_dashscope_api_key"
+cd <PROJECT_DIR>
+export PYTHONPATH="$(pwd)/src"
+export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
 
-gramine-manifest -Dproject_dir=$(pwd) deployment/gramine/vault.manifest.template deployment/gramine/vault.manifest
+gramine-manifest \
+  -Dproject_dir="$(pwd)" \
+  deployment/gramine/vault.manifest.template \
+  deployment/gramine/vault.manifest
+
 gramine-direct deployment/gramine/vault
 ```
 
-`gramine-direct` 只验证 Gramine 运行兼容性，不提供真实 SGX 硬件隔离。生成的
-`deployment/gramine/vault.manifest` 可能包含 API key，不要提交或公开。
+`gramine-direct` 只验证 Gramine 运行兼容性，不提供真实 SGX 硬件隔离。生成的 `deployment/gramine/vault.manifest` 可能包含环境变量，不要提交或公开。
 
-#### 终端 3：启动 FastAPI Agent
+### 五、Ubuntu：启动 FastAPI Agent
 
-为了允许另一台内网机器访问，Agent 监听 `0.0.0.0:8000`：
+如果需要微信活动报告能力，先配置 Windows WeChatDataAnalysis 地址：
 
 ```bash
-cd /home/xzq2628/confidentialAgentMemoryVault
-export DASHSCOPE_API_KEY="your_dashscope_api_key"
-export REDIS_URL="redis://127.0.0.1:6379/0"
+export WECHAT_EXPORT_API_BASE="http://<WECHAT_WINDOWS_HOST>:10392"
+export WECHAT_REPORT_OUTPUT_ROOT="src/tools/wechatOutput"
+export WECHAT_EXPORT_BACKEND_OUTPUT_DIR="<WECHAT_BACKEND_EXPORT_DIR>"
+```
 
-/home/xzq2628/myenv/bin/python -m uvicorn \
+其中：
+
+- `WECHAT_EXPORT_API_BASE` 是 Ubuntu 访问 Windows WeChatDataAnalysis 的 HTTP 地址。
+- `WECHAT_REPORT_OUTPUT_ROOT` 是 Agent 侧保存报告产物的目录。
+- `WECHAT_EXPORT_BACKEND_OUTPUT_DIR` 是 WeChatDataAnalysis 后端执行导出时使用的输出目录，格式按 Windows 后端实际要求填写。
+
+启动 Agent：
+
+```bash
+cd <PROJECT_DIR>
+export PYTHONPATH="$(pwd)/src"
+export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
+export REDIS_URL="redis://127.0.0.1:6379/0"
+export VAULT_HOST="127.0.0.1"
+export VAULT_PORT="8765"
+
+<PYTHON> -m uvicorn \
   untrusted.api_server:app \
   --app-dir src \
   --host 0.0.0.0 \
   --port 8000
 ```
 
-正常日志：
-
-```text
-Application startup complete.
-Uvicorn running on http://0.0.0.0:8000
-```
-
-在服务器本机进行健康检查：
+健康检查：
 
 ```bash
 curl http://127.0.0.1:8000/health
 ```
 
-正常结果：
+服务器只需要向内网开放 FastAPI 的 `8000` 端口。Redis `6379` 和 Vault `8765` 应只允许服务器本机访问。
 
-```json
-{"ok":true}
-```
+### 六、启动聊天客户端
 
-获取服务器内网地址：
+在能访问 Agent 的机器上运行：
 
 ```bash
-hostname -I
+cd <PROJECT_DIR>
+export PYTHONPATH="$(pwd)/src"
+
+<PYTHON> src/client/chat_cli.py \
+  --user <USER_ID> \
+  --url http://<AGENT_HOST>:8000
 ```
 
-如果启用了防火墙，只向实际内网网段开放 `8000`。例如：
+如果只测试普通聊天、不连接 vault，可以显式使用无 vault 模式：
 
 ```bash
-sudo ufw allow from 192.168.1.0/24 to any port 8000 proto tcp
-```
-
-不要向内网或公网开放 `6379` 和 `8765`。
-
-### 三、内网用户端调用
-
-用户端需要拥有项目中的 `src/client/`、`src/common/` 和 `src/interface/` 代码及 Python
-依赖。进入用户端项目目录：
-
-```bash
-cd /path/to/confidentialAgentMemoryVault
-```
-
-先测试网络连通性，地址替换为服务器的真实内网 IP：
-
-```bash
-curl http://192.168.1.100:8000/health
-```
-
-然后启动封装后的交互式客户端：
-
-```bash
-/home/xzq2628/myenv/bin/python src/client/chat_cli.py \
-  --user alice \
-  --url http://192.168.1.100:8000
-```
-
-如果只想测试普通聊天、不连接 vault，可以显式使用无 vault 模式：
-
-```bash
-/home/xzq2628/myenv/bin/python src/client/chat_cli.py \
-  --user alice \
-  --url http://192.168.1.100:8000 \
+<PYTHON> src/client/chat_cli.py \
+  --user <USER_ID> \
+  --url http://<AGENT_HOST>:8000 \
   --no-vault
 ```
-
-如果用户端机器上的虚拟环境路径不同，将
-`/home/xzq2628/myenv/bin/python` 替换为用户端实际的 Python 路径。
 
 客户端会自动完成：
 
@@ -514,10 +491,10 @@ curl http://192.168.1.100:8000/health
 需要继续指定的对话时，可以显式设置 session：
 
 ```bash
-/home/xzq2628/myenv/bin/python src/client/chat_cli.py \
-  --user alice \
-  --session conversation-1 \
-  --url http://192.168.1.100:8000
+<PYTHON> src/client/chat_cli.py \
+  --user <USER_ID> \
+  --session <SESSION_ID> \
+  --url http://<AGENT_HOST>:8000
 ```
 
 在 Python 程序中调用：
@@ -530,8 +507,8 @@ export PYTHONPATH="$(pwd)/src"
 from client import ConfidentialAgentClient
 
 client = ConfidentialAgentClient(
-    user_id="alice",
-    api_base_url="http://192.168.1.100:8000",
+    user_id="<USER_ID>",
+    api_base_url="http://<AGENT_HOST>:8000",
 )
 print(client.chat("我喜欢喝粥"))
 print(client.chat("根据我的偏好推荐早餐"))
@@ -622,12 +599,13 @@ sudo ufw status
 并使用旧的本地 secure session 模式：
 
 ```bash
-cd /home/xzq2628/confidentialAgentMemoryVault
-export DASHSCOPE_API_KEY="your_dashscope_api_key"
-export VAULT_USER_ID="alice"
-export USER_MEMORY_KEY="existing_fernet_key"
+cd <PROJECT_DIR>
+export PYTHONPATH="$(pwd)/src"
+export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
+export VAULT_USER_ID="<USER_ID>"
+export USER_MEMORY_KEY="<FERNET_KEY>"
 
-/home/xzq2628/myenv/bin/python src/untrusted/chat_app.py
+<PYTHON> src/untrusted/chat_app.py
 ```
 
 ## 记忆管理
@@ -635,7 +613,10 @@ export USER_MEMORY_KEY="existing_fernet_key"
 启动 vault 后，可以用管理命令查看或遗忘当前用户的记忆：
 
 ```bash
-/home/xzq2628/myenv/bin/python src/untrusted/memory_management_commands.py
+cd <PROJECT_DIR>
+export PYTHONPATH="$(pwd)/src"
+
+<PYTHON> src/untrusted/memory_management_commands.py
 ```
 
 支持命令：
@@ -653,15 +634,15 @@ exit | quit            Exit
 也可以直接解密查看当前用户记忆：
 
 ```bash
-/home/xzq2628/myenv/bin/python scripts/decrypt_memories.py <user_id> <fernet_key>
+<PYTHON> scripts/decrypt_memories.py <USER_ID> <FERNET_KEY>
 ```
 
 或：
 
 ```bash
-export USER_ID="default_user"
-export USER_MEMORY_KEY="a_fernet_key_for_this_user"
-/home/xzq2628/myenv/bin/python scripts/decrypt_memories.py
+export USER_ID="<USER_ID>"
+export USER_MEMORY_KEY="<FERNET_KEY>"
+<PYTHON> scripts/decrypt_memories.py
 ```
 
 ## 测试
@@ -669,11 +650,13 @@ export USER_MEMORY_KEY="a_fernet_key_for_this_user"
 当前测试：
 
 ```bash
-/home/xzq2628/myenv/bin/python tests/test_memory_lifecycle.py
-/home/xzq2628/myenv/bin/python tests/test_capability_security.py
-/home/xzq2628/myenv/bin/python tests/test_agent_service_capability.py
-/home/xzq2628/myenv/bin/python tests/test_client_provisioning.py
-/home/xzq2628/myenv/bin/python tests/test_high_level_client.py
+<PYTHON> tests/test_memory_lifecycle.py
+<PYTHON> tests/test_capability_security.py
+<PYTHON> tests/test_agent_service_capability.py
+<PYTHON> tests/test_client_provisioning.py
+<PYTHON> tests/test_high_level_client.py
+<PYTHON> tests/test_wechat_activity_report_tool.py
+<PYTHON> -m unittest src.tools.wechat_normalizer.tests.test_normalizer
 ```
 
 测试覆盖：
