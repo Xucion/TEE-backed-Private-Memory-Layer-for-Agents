@@ -1,0 +1,4 @@
+[submodule "externalAPI/WeChatDataAnalysis"]
+	path = externalAPI/WeChatDataAnalysis
+	url = https://github.com/LifeArchiveProject/WeChatDataAnalysis.git
+	ignore = dirty
