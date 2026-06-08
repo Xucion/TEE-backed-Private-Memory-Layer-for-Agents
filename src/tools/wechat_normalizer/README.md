@@ -311,6 +311,20 @@ python .\src\tools\render_wechat_summary.py `
 PDF 导出需要本机存在 Chrome、Edge 或 Chromium。若浏览器不在常见路径，可通过
 `WECHAT_PDF_BROWSER` 指定可执行文件；导出失败时只返回 HTML，不会报告不存在的 PDF 路径。
 
+## 可选环境诊断
+
+第一次部署、换网络、修改 `WECHAT_EXPORT_API_BASE` 或排查报告生成失败时，可以运行诊断脚本：
+
+```powershell
+python .\src\tools\check_wechat_report_env.py `
+  --wechat-api http://<WECHAT_WINDOWS_HOST>:10392 `
+  --contact-keyword "<CONTACT_OR_GROUP_NAME>" `
+  --output-root .\src\tools\wechatOutput `
+  --backend-output-dir "<WECHAT_BACKEND_EXPORT_DIR>"
+```
+
+该脚本检查 WeChatDataAnalysis health、联系人查询、DashScope key、输出目录、PDF 浏览器、Redis 和 Vault socket。它是部署验收和故障排查工具，不需要每次生成报告前都运行。
+
 只生成 HTML，不导出 PDF：
 
 ```powershell

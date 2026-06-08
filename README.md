@@ -447,7 +447,35 @@ curl http://127.0.0.1:8000/health
 
 服务器只需要向内网开放 FastAPI 的 `8000` 端口。Redis `6379` 和 Vault `8765` 应只允许服务器本机访问。
 
-### 六、启动聊天客户端
+### 六、可选：运行微信报告环境诊断
+
+第一次部署、换机器、换网络或修改环境变量后，可以运行诊断脚本检查微信报告链路的基础依赖。日常生成报告前不必每次运行。
+
+```bash
+cd <PROJECT_DIR>
+export PYTHONPATH="$(pwd)/src"
+
+<PYTHON> src/tools/check_wechat_report_env.py \
+  --wechat-api http://<WECHAT_WINDOWS_HOST>:10392 \
+  --contact-keyword "<CONTACT_OR_GROUP_NAME>" \
+  --output-root src/tools/wechatOutput \
+  --backend-output-dir "<WECHAT_BACKEND_EXPORT_DIR>"
+```
+
+该脚本会检查：
+
+- WeChatDataAnalysis `/api/health`
+- 可选的联系人/群名查询接口
+- `DASHSCOPE_API_KEY`
+- 报告输出目录是否可写
+- `WECHAT_EXPORT_BACKEND_OUTPUT_DIR` 是否配置
+- Chrome/Edge/Chromium PDF 浏览器
+- Redis ping
+- Vault socket 是否可连接
+
+检查结果中的 `WARN` 表示能力可能降级，例如无法生成 PDF 或无法使用长期记忆；`FAIL` 表示微信报告主链路的关键条件不满足。
+
+### 七、启动聊天客户端
 
 在能访问 Agent 的机器上运行：
 
@@ -517,7 +545,7 @@ print(client.chat("根据我的偏好推荐早餐"))
 内网测试可以暂时使用 HTTP，但聊天内容和 bearer capability 仍可能被内网监听。
 正式部署必须使用 HTTPS。
 
-### 四、关闭项目
+### 八、关闭项目
 
 按照启动顺序的反方向关闭。
 
@@ -537,7 +565,7 @@ docker ps --filter name=camv-redis
 ps -ef | grep -E 'vault_server|uvicorn' | grep -v grep
 ```
 
-### 五、下次重新启动
+### 九、下次重新启动
 
 不需要再次执行 `docker run`，依次执行：
 
@@ -548,7 +576,7 @@ docker start camv-redis
 然后重新启动 Vault 和 FastAPI Agent。用户端仍使用原来的 `--user alice`
 命令，客户端会自动读取已保存的用户 key 并获取新的 capability。
 
-### 六、常见问题
+### 十、常见问题
 
 #### Redis 容器名称冲突
 
@@ -593,7 +621,7 @@ sudo ufw status
 确认 Agent 使用 `--host 0.0.0.0`，并且防火墙只对正确的内网网段开放
 `8000`。
 
-### 七、开发兼容 CLI
+### 十一、开发兼容 CLI
 
 `src/untrusted/chat_app.py` 仍保留为服务器本机开发入口。它不经过远程用户端封装，
 并使用旧的本地 secure session 模式：
@@ -689,6 +717,7 @@ src/
   trusted/                     Vault 服务、密钥管理、存储和检索
   untrusted/                   Agent API、运行时和记忆抽取
   tools/                       微信聊天记录规范化、活动提取、汇总和渲染
+    check_wechat_report_env.py 微信报告部署诊断脚本
 
 deployment/
   gramine/
