@@ -11,6 +11,7 @@ from interface.vault_api import VaultApiError, relay_vault_request
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 输入 FastAPI app；输出 lifespan 迭代器；作用是按应用生命周期启动和关闭 AgentService。
+    """管理 FastAPI 应用生命周期。"""
     service = AgentService(
         redis_url=os.getenv(
             "REDIS_URL",
@@ -60,6 +61,7 @@ class ProvisionEnvelope(BaseModel):
 @app.post("/vault/handshake")
 def relay_handshake(payload: HandshakeRequest):
     # 输入客户端握手参数；输出 vault 握手响应；作用是透明转发而不派生或保存信道密钥。
+    """转发handshake。"""
     try:
         return relay_vault_request({
             "action": "handshake_start",
@@ -72,6 +74,7 @@ def relay_handshake(payload: HandshakeRequest):
 @app.post("/vault/provision")
 def relay_provision(payload: ProvisionEnvelope):
     # 输入客户端加密 envelope；输出 vault 加密响应；作用是转发 key provisioning 而不接触明文 key。
+    """转发provision。"""
     try:
         return relay_vault_request({
             "action": "secure_provision_user_key",
@@ -82,12 +85,14 @@ def relay_provision(payload: ProvisionEnvelope):
 
 def get_agent_service(request: Request) -> AgentService:
     # 输入 FastAPI request；输出 AgentService；作用是从应用状态获取已启动的业务服务。
+    """返回已启动的 AgentService 实例。"""
     return request.app.state.agent_service
 
 
 @app.get("/health")
 def health(request: Request) -> dict[str, bool]:
     # 输入 FastAPI request；输出健康状态；作用是确认 AgentService 已由 lifespan 初始化。
+    """返回服务健康状态。"""
     get_agent_service(request)
     return {"ok": True}
 
@@ -104,6 +109,7 @@ def chat(
     ),
 ) -> ChatResponse:
     # 输入聊天请求和 capability header；输出 Agent 回复；作用是用 capability 调用 vault 数据面。
+    """发送聊天请求并返回助手回复。"""
     service = get_agent_service(request)
 
     try:

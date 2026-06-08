@@ -56,6 +56,35 @@ python .\src\tools\build_wechat_activity_report.py `
 
 详细说明见 `src/tools/wechat_normalizer/README.md`。
 
+Agent 侧也提供了对话式微信报告入口，实现在 `src/untrusted/wechat_activity_report_tool.py`。用户可以直接说：
+
+```text
+帮我生成卫星互联网研究所（25级）一周聊天内容的活动总结
+帮我生成和寻徐今天的聊天内容的活动总结
+```
+
+该入口会通过 LangGraph 子图执行：
+
+```text
+route_intent -> parse_request -> resolve_contact -> build_report -> final_response
+```
+
+`parse_request` 会从自然语言和短期对话历史中同时提取对象和时间范围；对象可以是联系人或群名，时间支持今天、昨天、前天、本周、上周、近一周和明确日期。缺少对象或时间时，Agent 会追问缺失槽位，并在下一轮复用上一轮上下文。
+
+当用户没有直接给出 `username` 时，`resolve_contact` 会调用 WeChatDataAnalysis 的联系人接口：
+
+```text
+GET /api/chat/contacts?keyword=<对象名>&include_friends=true&include_groups=false&include_officials=false
+```
+
+内网部署时可通过环境变量配置外部微信导出工具：
+
+```bash
+export WECHAT_EXPORT_API_BASE="http://10.1.151.71:10392"
+export WECHAT_REPORT_OUTPUT_ROOT="src/tools/wechatOutput"
+export WECHAT_EXPORT_BACKEND_OUTPUT_DIR="D:\\srcVersionWechatAnalysis\\WeChatDataAnalysis\\exports"
+```
+
 一个具备隐私保护长期记忆能力的对话 Agent 原型。项目提供 FastAPI Agent 服务和保留的 CLI 入口，把外部 LLM 调用、短期会话和记忆抽取放在 `src/untrusted/`，把长期记忆的密钥管理、加密存储、向量检索、记忆生命周期管理和隐私最小化放在 `src/trusted/` vault 侧。
 
 欢迎联系讨论。
@@ -97,7 +126,8 @@ python .\src\tools\build_wechat_activity_report.py `
 - Redis 保存带 TTL 的短期多轮历史。
 - 每轮用户输入前通过 capability 从 vault 检索长期记忆上下文。
 - 每轮回复后异步抽取并存储用户长期记忆。
-- capability 无效、过期或 vault 不可用时拒绝当前 `/chat` 请求。
+- capability 缺失时可以降级为无长期记忆聊天；capability 存在但 vault 检索失败时会继续无记忆回答，并记录日志。
+- 微信活动报告请求会优先进入工具子图，不写入长期记忆。
 
 ### 记忆抽取
 
@@ -262,6 +292,7 @@ export REDIS_URL="redis://127.0.0.1:6379/0"
 export CHAT_HISTORY_TTL_SECONDS="86400"
 export VAULT_LOG_LEVEL="INFO"
 export API_LOG_LEVEL="INFO"
+export WECHAT_EXPORT_API_BASE="http://127.0.0.1:10392"
 export PYTHONPATH="$(pwd)/src"
 ```
 
@@ -447,6 +478,15 @@ curl http://192.168.1.100:8000/health
 /home/xzq2628/myenv/bin/python src/client/chat_cli.py \
   --user alice \
   --url http://192.168.1.100:8000
+```
+
+如果只想测试普通聊天、不连接 vault，可以显式使用无 vault 模式：
+
+```bash
+/home/xzq2628/myenv/bin/python src/client/chat_cli.py \
+  --user alice \
+  --url http://192.168.1.100:8000 \
+  --no-vault
 ```
 
 如果用户端机器上的虚拟环境路径不同，将
@@ -654,6 +694,7 @@ export USER_MEMORY_KEY="a_fernet_key_for_this_user"
 - Redis key/value 不保存 capability 原文
 - Client SDK -> FastAPI relay -> Vault provisioning 调用链
 - 高级客户端自动保存 key、调用 `/chat` 和刷新 capability
+- 微信活动报告工具的自然语言对象和时间范围提取
 
 ## 项目文件
 
@@ -664,6 +705,7 @@ src/
   interface/                   Vault 边界 API 和模拟 RA 公钥
   trusted/                     Vault 服务、密钥管理、存储和检索
   untrusted/                   Agent API、运行时和记忆抽取
+  tools/                       微信聊天记录规范化、活动提取、汇总和渲染
 
 deployment/
   gramine/

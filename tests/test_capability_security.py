@@ -29,12 +29,14 @@ from trusted.vault_server import VaultError
 
 def _assert(condition: bool, message: str) -> None:
     # 输入断言条件和消息；输出无返回值；作用是为脚本式测试提供明确失败信息。
+    """在测试中断言条件成立。"""
     if not condition:
         raise AssertionError(message)
 
 
 def _reset_security_state(user_id: str) -> None:
     # 输入测试 user_id；输出无返回值；作用是清理进程内 session、capability 和用户 key。
+    """重置 capability 安全测试状态。"""
     with vault_server._SESSION_LOCK:
         vault_server._SESSIONS.clear()
     with vault_server._CAPABILITY_LOCK:
@@ -45,6 +47,7 @@ def _reset_security_state(user_id: str) -> None:
 
 def _provision_through_protocol(user_id: str, user_key: bytes) -> tuple[str, str, bytes]:
     # 输入 user_id 和用户 key；输出 capability、session_id 和 channel_key；作用是模拟客户端完整 RA 注入流程。
+    """注入through、protocol。"""
     nonce = secrets.token_urlsafe(24)
     client_private_key, client_public_key = generate_x25519_keypair()
     client_pubkey_b64 = public_key_to_b64(client_public_key)
@@ -94,6 +97,7 @@ def _provision_through_protocol(user_id: str, user_key: bytes) -> tuple[str, str
 
 def test_capability_security() -> None:
     # 输入无显式参数；输出无返回值；作用是验证 capability 绑定、scope、过期和 key 覆盖保护。
+    """验证 capability_security 的行为符合预期。"""
     user_id = f"capability_test_{secrets.token_hex(4)}"
     user_key = Fernet.generate_key()
     _reset_security_state(user_id)
@@ -117,6 +121,7 @@ def test_capability_security() -> None:
 
         def capture_retrieve(request: dict[str, Any]) -> dict[str, Any]:
             # 输入 vault retrieve 请求；输出测试响应；作用是捕获最终绑定的 user_id。
+            """捕获测试调用参数。"""
             captured_requests.append(dict(request))
             return {"memory_context": "", "retrieved_count": 0}
 

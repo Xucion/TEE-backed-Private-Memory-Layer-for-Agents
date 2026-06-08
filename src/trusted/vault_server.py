@@ -115,12 +115,14 @@ class VaultError(Exception):
 
 def _load_sim_ra_private_key():
     # 输入无显式参数；输出模拟 RA 私钥对象；作用是加载用于签名 quote 的开发私钥。
+    """加载用于签名模拟 RA quote 的开发私钥。"""
     key_data = SIM_RA_PRIVATE_KEY_FILE.read_bytes()
     return serialization.load_pem_private_key(key_data, password=None)
 
 
 def _sign_quote(quote: dict[str, Any]) -> str:
     # 输入 quote 对象；输出 base64 签名；作用是用模拟 RA 私钥签名身份声明。
+    """使用开发私钥签名模拟 attestation quote。"""
     private_key = _load_sim_ra_private_key()
     signature = private_key.sign(canonical_json(quote))
     return base64.b64encode(signature).decode("ascii")
@@ -128,16 +130,19 @@ def _sign_quote(quote: dict[str, Any]) -> str:
 
 def _success(data: dict[str, Any] | None = None) -> dict[str, Any]:
     # 输入可选响应数据；输出成功响应对象；作用是统一 vault 成功返回格式。
+    """构造 vault 成功响应。"""
     return {"ok": True, "data": data or {}}
 
 
 def _failure(message: str) -> dict[str, Any]:
     # 输入错误消息；输出失败响应对象；作用是统一 vault 错误返回格式。
+    """构造 vault 失败响应。"""
     return {"ok": False, "error": message}
 
 
 def _coerce_positive_int(value: Any, default: int, max_value: int) -> int:
     # 输入待校验值、默认值和上限；输出正整数；作用是规范 top_k 等正整数参数。
+    """把输入值校验并转换为正整数。"""
     if value is None:
         return default
     if not isinstance(value, int) or value <= 0 or value > max_value:
@@ -147,6 +152,7 @@ def _coerce_positive_int(value: Any, default: int, max_value: int) -> int:
 
 def _coerce_threshold(value: Any, default: float) -> float:
     # 输入待校验阈值和默认值；输出 0 到 1 的浮点数；作用是规范检索阈值参数。
+    """校验并转换检索相似度阈值。"""
     if value is None:
         return default
     if not isinstance(value, (int, float)):
@@ -159,11 +165,13 @@ def _coerce_threshold(value: Any, default: float) -> float:
 
 def _normalize_slot_part(value: Any) -> str:
     # 输入任意槽位片段；输出小写下划线文本；作用是规范 memory slot 组成部分。
+    """规范化 memory slot 的单个片段。"""
     return "_".join(str(value or "").strip().lower().split())
 
 
 def _normalize_memory_slot(predicate: str, object_value: str, raw_slot: Any) -> str | None:
     # 输入谓词、对象和原始 slot；输出规范 slot 或 None；作用是确定互斥事实槽位。
+    """规范化记忆 slot 字段。"""
     slot = None
     if raw_slot is not None:
         slot = _normalize_slot_part(raw_slot) or None
@@ -187,6 +195,7 @@ def _normalize_memory_slot(predicate: str, object_value: str, raw_slot: Any) -> 
 
 def _validate_nonce(value: Any) -> str:
     # 输入任意 nonce 值；输出合法 nonce 字符串；作用是校验模拟 RA 和握手随机数。
+    """校验nonce。"""
     if not isinstance(value, str):
         raise VaultError("attest 操作需要提供字符串 nonce")
 
@@ -201,6 +210,7 @@ def _validate_nonce(value: Any) -> str:
 
 def _build_simulated_quote(nonce: str) -> dict[str, str]:
     # 输入 nonce；输出模拟 quote；作用是构造开发环境中的 vault 身份声明。
+    """构造包含 nonce 和 measurement 的模拟 quote。"""
     return {
         "protocol_version": SIM_RA_PROTOCOL_VERSION,
         "mode": SIM_RA_MODE,
@@ -213,6 +223,7 @@ def _build_simulated_quote(nonce: str) -> dict[str, str]:
 
 def _get_session_key(session_id: Any) -> bytes:
     # 输入 session_id；输出信道密钥；作用是读取并校验未过期的安全信道 session。
+    """读取安全会话的 channel key。"""
     if not isinstance(session_id, str) or not session_id:
         raise VaultError("需要有效的 session_id")
 
@@ -233,6 +244,7 @@ def _get_session_key(session_id: Any) -> bytes:
 
 def _get_bound_session_user_id(session_id: str) -> str:
     # 输入 session_id；输出 session 绑定的 user_id；作用是阻止安全会话切换到其他用户。
+    """读取安全会话已绑定的 user_id。"""
     _get_session_key(session_id)
     with _SESSION_LOCK:
         session = _SESSIONS.get(session_id)
@@ -246,6 +258,7 @@ def _get_bound_session_user_id(session_id: str) -> str:
 
 def _assert_session_can_bind_user(session_id: str, requested_user_id: Any) -> None:
     # 输入 session_id 和待注入 user_id；输出无返回值；作用是在写 key 前阻止已绑定 session 切换用户。
+    """校验安全会话是否允许绑定指定用户。"""
     _get_session_key(session_id)
     if not isinstance(requested_user_id, str) or not requested_user_id.strip():
         raise VaultError("user_id 必须是非空字符串")
@@ -262,6 +275,7 @@ def _assert_session_can_bind_user(session_id: str, requested_user_id: Any) -> No
 
 def _purge_expired_capabilities(now: float | None = None) -> None:
     # 输入可选当前时间；输出无返回值；作用是清理过期 capability 并限制内存增长。
+    """清理已过期的 capability。"""
     current_time = now or time.time()
     with _CAPABILITY_LOCK:
         expired_tokens = [
@@ -275,6 +289,7 @@ def _purge_expired_capabilities(now: float | None = None) -> None:
 
 def _decrypt_secure_payload(session_id: str, request: dict[str, Any]) -> dict[str, Any]:
     # 输入 session_id 和加密请求；输出明文 payload；作用是解密并校验安全信道请求。
+    """解密secure、载荷数据。"""
     logger.info("开始解密安全信道请求: session_id=%s", session_id[:8])
     try:
         payload = decrypt_json(
@@ -295,6 +310,7 @@ def _decrypt_secure_payload(session_id: str, request: dict[str, Any]) -> dict[st
 
 def _encrypt_secure_payload(session_id: str, payload: dict[str, Any]) -> dict[str, str]:
     # 输入 session_id 和明文响应；输出加密 envelope；作用是加密安全信道响应。
+    """加密secure、载荷数据。"""
     logger.info(
         "加密安全信道响应: session_id=%s payload_keys=%s",
         session_id[:8],
@@ -308,11 +324,13 @@ def _encrypt_secure_payload(session_id: str, payload: dict[str, Any]) -> dict[st
 
 def _legacy_plaintext_allowed() -> bool:
     # 输入环境变量；输出是否允许明文请求；作用是控制旧版 store/retrieve 兼容入口。
+    """判断是否允许旧版明文 vault API。"""
     return os.getenv("VAULT_ALLOW_LEGACY_PLAINTEXT", "").lower() in {"1", "true", "yes"}
 
 
 def _get_request_user_key(request: dict[str, Any]) -> tuple[str, bytes]:
     # 输入请求对象；输出规范 user_id 和用户 key；作用是从内存密钥表解析请求所属用户。
+    """从请求或 capability 上下文中解析用户 key。"""
     user_id = request.get("user_id")
     try:
         user_key = get_user_key(user_id)
@@ -326,6 +344,7 @@ def _get_request_user_key(request: dict[str, Any]) -> tuple[str, bytes]:
 
 def _validate_memory(mem: Any) -> dict[str, Any]:
     # 输入任意记忆对象；输出规范化记忆字典；作用是校验和收敛 vault 接收的 memory 字段。
+    """校验记忆数据。"""
     if not isinstance(mem, dict):
         raise VaultError("每条记忆必须是一个对象")
 
@@ -377,6 +396,7 @@ def _validate_memory(mem: Any) -> dict[str, Any]:
     }
 
 def _handle_list_memories_data(request: dict[str, Any]) -> dict[str, Any]:
+    """处理列出记忆的数据面请求。"""
     user_id, user_key = _get_request_user_key(request)
 
     status = request.get("status")
@@ -395,6 +415,7 @@ def _handle_list_memories_data(request: dict[str, Any]) -> dict[str, Any]:
 
 def _handle_store_data(request: dict[str, Any]) -> dict[str, Any]:
     # 输入明文 store payload；输出 stored_count 数据；作用是校验并写入用户记忆。
+    """处理写入记忆的数据面请求。"""
     user_id, user_key = _get_request_user_key(request)
     raw_memories = request.get("memories")
     if not isinstance(raw_memories, list):
@@ -408,6 +429,7 @@ def _handle_store_data(request: dict[str, Any]) -> dict[str, Any]:
     return {"stored_count": stored_count}
 
 def _handle_forget_data(request: dict[str, Any]) -> dict[str, Any]:
+    """处理遗忘记忆的数据面请求。"""
     user_id, user_key = _get_request_user_key(request)
 
     memory_id = str(request.get("memory_id", "")).strip()
@@ -430,6 +452,7 @@ def _handle_forget_data(request: dict[str, Any]) -> dict[str, Any]:
 
 def _minimize_memories(memories: list[dict[str, Any]]) -> str:
     # 输入检索结果列表；输出最小化上下文文本；作用是避免高敏感记忆原文出 vault。
+    """对返回给 Agent 的记忆执行隐私最小化。"""
     type_hints = {
         "health": "用户有健康相关的限制。提供保守的、注重安全的指导。",
         "project": "用户有重要的项目背景。回复相关话题时需要谨慎。",
@@ -455,6 +478,7 @@ def _minimize_memories(memories: list[dict[str, Any]]) -> str:
 
 def _handle_retrieve_data(request: dict[str, Any]) -> dict[str, Any]:
     # 输入明文 retrieve payload；输出上下文和数量；作用是检索并最小化用户记忆。
+    """处理检索记忆的数据面请求。"""
     user_id, user_key = _get_request_user_key(request)
     query = str(request.get("query", "")).strip()
     if not query:
@@ -487,6 +511,7 @@ def _handle_retrieve_data(request: dict[str, Any]) -> dict[str, Any]:
 
 def handle_request(request: dict[str, Any]) -> dict[str, Any]:
     # 输入 vault 请求对象；输出统一响应对象；作用是分发 attest、握手、加密请求和兼容明文请求。
+    """分发并处理单个 vault 请求。"""
     action = request.get("action")
 
     if action == "attest":
@@ -682,6 +707,7 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
 class VaultRequestHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         # 输入 socket 单行 JSON 请求；输出 socket JSON 响应；作用是处理一个 vault 客户端连接。
+        """处理单个 socket 客户端连接。"""
         try:
             raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
             if len(raw) > MAX_REQUEST_BYTES:
@@ -714,6 +740,7 @@ class ThreadedVaultServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 def run_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     # 输入监听地址和端口；输出无返回值；作用是启动多线程 vault TCP 服务。
+    """运行server。"""
     with ThreadedVaultServer((host, port), VaultRequestHandler) as server:
         logger.info("Vault 服务器正在监听 %s:%s", host, port)
         server.serve_forever()
@@ -721,6 +748,7 @@ def run_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
 
 def _bind_user_and_issue_capability(session_id: str, user_id: str) -> str:
     # 输入 session_id 和 user_id；输出 bearer capability；作用是绑定会话用户并授予 Agent 数据面权限。
+    """绑定用户并签发数据面 capability。"""
     _get_session_key(session_id)
     with _SESSION_LOCK:
         session = _SESSIONS.get(session_id)
@@ -750,6 +778,7 @@ def _bind_user_and_issue_capability(session_id: str, user_id: str) -> str:
 
 def _resolve_capability(token: Any, required_scope: str) -> str:
     # 输入 capability 和所需权限；输出绑定 user_id；作用是校验 bearer token、期限和 scope。
+    """解析并校验 capability。"""
     if not isinstance(token, str) or not token:
         raise VaultError("缺少 capability")
 
@@ -767,6 +796,7 @@ def _resolve_capability(token: Any, required_scope: str) -> str:
 
 def main() -> None:
     # 输入环境变量中的监听配置；输出无返回值；作用是作为 vault server 命令行入口。
+    """执行命令行入口。"""
     host = os.getenv("VAULT_HOST", DEFAULT_HOST)
     port = int(os.getenv("VAULT_PORT", str(DEFAULT_PORT)))
     run_server(host=host, port=port)

@@ -21,6 +21,7 @@ from trusted.vault_server import _validate_memory
 
 class FakeEmbeddings:
     def embed_query(self, text: str) -> list[float]:
+        """返回测试用的查询向量。"""
         if "粥" in text:
             return [1.0, 0.0, 0.0, 0.0]
         if "代码" in text:
@@ -33,11 +34,13 @@ class FakeEmbeddings:
 
 
 def _assert(condition: bool, message: str) -> None:
+    """在测试中断言条件成立。"""
     if not condition:
         raise AssertionError(message)
 
 
 def _validated_memory(**fields: Any) -> dict[str, Any]:
+    """构造测试用的规范化记忆。"""
     defaults = {
         "memory_type": "other",
         "sensitivity": "low",
@@ -51,11 +54,13 @@ def _validated_memory(**fields: Any) -> dict[str, Any]:
 
 
 def _only_memory(memories: list[dict[str, Any]], label: str) -> dict[str, Any]:
+    """返回列表中的唯一记忆记录。"""
     _assert(len(memories) == 1, f"{label}: expected 1 memory, got {len(memories)}")
     return memories[0]
 
 
 def _find_by_content(memories: list[dict[str, Any]], text: str) -> dict[str, Any] | None:
+    """按内容查找测试记忆。"""
     for memory in memories:
         if memory.get("content") == text:
             return memory
@@ -63,12 +68,14 @@ def _find_by_content(memories: list[dict[str, Any]], text: str) -> dict[str, Any
 
 
 def _cleanup_user_file(user_id: str) -> None:
+    """清理测试用户的记忆文件。"""
     memory_file = memory_store._memory_file_for_user(user_id)
     if memory_file.exists():
         memory_file.unlink()
 
 
 def test_memory_lifecycle() -> None:
+    """验证 memory_lifecycle 的行为符合预期。"""
     memory_store._embeddings = FakeEmbeddings()
     memory_retriever._embeddings = FakeEmbeddings()
 

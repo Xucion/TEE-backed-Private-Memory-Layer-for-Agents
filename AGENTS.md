@@ -1,179 +1,171 @@
-## 项目背景与当前状态
+# 项目协作说明
 
-### 项目目标
+## 角色与权限
 
-构建一个具备**隐私保护长期记忆**能力的对话 Agent。核心思想是将用户的长期记忆存储与检索逻辑放入**可信执行环境（TEE）**，降低敏感用户画像被长期攻击窃取的风险。
+你是当前项目的高级安全代码助手，可以修改本仓库内文件，但必须遵循最小权限原则。
 
-项目名称：**Confidential Agent Memory Vault**。
+- 不要修改项目根目录之外的文件。
+- 不要修改 `externalAPI/` 目录下的任何内容；该目录只作为外部工具源码和 API 文档参考。
+- 遇到 `rm`、`sudo`、`chmod`、`chown`、全局覆盖、递归删除或依赖安装命令时，必须先向用户确认。
+- 不要自动运行 `npm install`、`pip install` 等依赖安装命令，除非用户明确要求。
+- 可以修改 `requirements.txt` 或项目文档来记录依赖变化。
 
----
+## 项目目标
 
-### 当前总体进度
+Confidential Agent Memory Vault 是一个具备隐私保护长期记忆能力的对话 Agent 原型。核心目标是把长期记忆的密钥管理、加密存储、向量检索、生命周期管理和隐私最小化放入 vault 边界，后续迁移到真实 TEE/SGX 环境，降低长期用户画像被宿主环境窃取的风险。
 
-Agent 主流程已经基本完成，项目已经从“单体本地记忆原型”推进到“Gramine direct 原型验证完成”阶段：
+当前实现已经包含：
 
-- `src/untrusted/`：运行在 TEE 外部，负责对话、记忆抽取、调用外部 LLM。
-- `src/interface/`：TEE 外部访问 vault 的统一 API 层，屏蔽 socket 通信细节。
-- `src/trusted/`：计划运行在 TEE 内部，负责记忆存储、检索、隐私最小化和 vault socket 服务。
+- FastAPI 对话服务和客户端 SDK。
+- LangGraph + LangChain 的对话运行时。
+- DashScope 通义千问聊天模型和 `text-embedding-v4` embedding。
+- per-user Fernet key provisioning。
+- 模拟 remote attestation。
+- X25519 + HKDF + AES-GCM 应用层安全信道。
+- bearer capability 数据面。
+- Redis 短期会话历史。
+- per-user 加密记忆文件。
+- 记忆生命周期管理。
+- 微信聊天记录活动报告流水线。
 
-目前代码结构已经具备 TEE 化接口边界，`src/trusted/vault_server.py` 已经可以通过 Gramine direct 启动。由于当前没有 SGX 硬件环境，项目暂时停留在 `gramine-direct` 阶段；`gramine-sgx`、SGX sealing 和 remote attestation 作为后续工作。
+当前 secure channel、quote 和 attestation 都是开发原型，不代表真实 SGX remote attestation。`gramine-direct` 只验证 Gramine 兼容性，不提供 SGX 硬件隔离。
 
----
+## 当前目录职责
 
-### 已完成的工作
+```text
+src/client/      用户端 SDK、交互式 CLI、本地 key 保存和 capability 自动刷新
+src/common/      模拟安全信道共享代码
+src/interface/   Vault socket API、模拟 RA 验证和 FastAPI relay 边界
+src/trusted/     Vault server、用户 key 管理、加密存储、检索和最小化
+src/untrusted/   FastAPI Agent、LangGraph 对话、记忆抽取和微信报告工具入口
+src/tools/       微信聊天记录规范化、LLM 活动提取、汇总、HTML/PDF 渲染
+scripts/         调试和冒烟脚本
+tests/           自动化测试
+deployment/      Gramine manifest 模板
+externalAPI/     外部 WeChatDataAnalysis 工具，禁止修改
+vault_data/      运行时生成的 per-user 加密记忆文件
+```
 
-#### 1. 基础对话框架（`src/untrusted/chat_app.py`）
+## Agent 主流程
 
-- 基于 **LangGraph** 构建对话图，节点为 `retrieve_memory` 和 `chatbot`。
-- 使用**通义千问**（`ChatTongyi` / `DASHSCOPE_API_KEY`）作为对话模型。
-- 手动维护 `history` 列表保持多轮对话连贯性。
-- 每轮对话前通过 `interface.vault_api.retrieve_context()` 检索长期记忆上下文。
-- 每轮对话结束后异步触发记忆提取和存储，不阻塞主流程。
-- 存储路径已经统一改为 `interface.vault_api.store_memories()`，不再由 agent 直接访问本地记忆文件。
+`src/untrusted/api_server.py` 提供 FastAPI 服务：
 
-#### 2. 记忆提取器（`src/untrusted/memory_extractor.py`）——TEE 外部
+- `/health` 返回服务健康状态。
+- `/chat` 接收用户消息、session 和可选 `X-Vault-Capability`。
+- `/vault/handshake` 和 `/vault/provision` 只转发 vault 握手和密文 provisioning 请求。
 
-- 调用外部 LLM，只分析**用户原话**，过滤 AI 回复。
-- 提取客观事实或明确长期偏好。
-- 输出结构化 JSON，字段包括 `content`、`memory_type`（`preference` / `profile` / `health` / `project` / `instruction` / `other`）、`sensitivity`（`high` / `low`）、`source`。
-- 包含输出校验（`_normalize_memories`），过滤格式错误、临时请求、提问句和非用户来源记忆。
-- 规范化第一人称表述，例如将“我喜欢喝粥”转换为“用户喜欢喝粥”。
+`src/untrusted/agent_runtime.py` 是服务端运行时：
 
-#### 3. Vault API（`src/interface/vault_api.py`）——TEE 外部接口层
+- 启动阶段初始化 Redis 和 `ChatTongyi`。
+- 使用 Redis 按 capability 指纹和 session 隔离短期历史，不保存 capability 原文。
+- 普通聊天会先尝试用 capability 检索 vault 长期记忆。
+- capability 缺失时降级为无长期记忆聊天。
+- capability 存在但 vault 检索失败时记录日志并继续无记忆回答。
+- 回复后后台只从用户原话抽取长期记忆，并通过 capability 写回 vault。
+- 微信活动报告请求会优先进入工具子图，不写入长期记忆。
 
-- 提供 `store_memories()` 和 `retrieve_context()` 两个统一入口。
-- 使用本地 socket 与 vault server 通信。
-- 支持 `VAULT_HOST`、`VAULT_PORT` 环境变量配置。
-- 对响应大小、JSON 格式、错误状态和返回字段做基础校验。
-- 向上抛出 `VaultApiError`，使 agent 在 vault 不可用时可以降级为无记忆对话。
+`src/untrusted/chat_app.py` 是本机开发 CLI，仍可用于旧式 secure session 调试。远程用户优先使用 `src/client/chat_cli.py` 或 `src/client/agent_client.py`。
 
-#### 4. Vault Server（`src/trusted/vault_server.py`）——计划运行在 TEE 内部
+## Vault 与安全边界
 
-- 已实现 socket server，暴露 `store` 和 `retrieve` 两个操作。
-- 对请求大小、动作类型、记忆字段、`top_k` 和 `threshold` 做基础校验。
-- `store` 路径调用 `trusted.memory_store.store_memories()`。
-- `retrieve` 路径调用 `trusted.memory_retriever.retrieve()`。
-- 在 vault 内部执行 Context Minimizer：高敏感记忆只返回类别级提示，低敏感记忆可返回原始内容。
-- 使用 `_STORE_LOCK` 保护同一进程内的存储和检索临界区。
-- 已通过 `gramine-direct deployment/gramine/vault` 成功启动，完成 Gramine direct 运行验证。
+`src/trusted/vault_server.py` 提供本地 JSON line socket 服务，默认监听 `127.0.0.1:8765`。
 
-#### 5. Gramine Direct 接入
+主要 action：
 
-- 已编写 `deployment/gramine/vault.manifest.template`。
-- 可通过 `gramine-manifest` 生成 `deployment/gramine/vault.manifest`。
-- 当前启动命令：
+- `attest`
+- `handshake_start`
+- `secure_ping`
+- `secure_provision_user_key`
+- `secure_request`
+- `capability_request`
+- `store` / `retrieve`，仅在 `VAULT_ALLOW_LEGACY_PLAINTEXT=1|true|yes` 时允许
+
+Vault 内部负责：
+
+- 验证请求大小、action、memory 字段、`top_k`、`threshold` 和 capability scope。
+- 使用 `src/trusted/user_key_manager.py` 保存进程内 `user_id -> Fernet key`。
+- 使用 `vault_data/{user_id}.memories.enc` 保存加密记忆。
+- 对 active 记忆进行 embedding 检索、重复合并、冲突替换、过期标记和 soft delete。
+- 在返回 Agent 前执行 Context Minimizer：高敏感记忆只返回类别级提示，低敏记忆可以返回内容。
+
+## 微信活动报告流水线
+
+`src/tools/` 下的微信工具链独立于长期记忆系统，不读取也不修改 vault 记忆。
+
+本地文件流水线：
+
+```text
+normalize_wechat_export.py      本地规范化导出 JSON
+extract_wechat_activities.py    调用 DashScope/Qwen 提取活动
+summarize_wechat_activities.py  本地合并和分类活动
+render_wechat_summary.py        本地渲染 HTML/PDF
+build_wechat_activity_report.py 一键编排以上步骤
+```
+
+图片处理策略：
+
+- 不做 OCR。
+- 不调用视觉模型。
+- 只按相近时间段把图片元信息关联到文本上下文。
+- HTML 会以内嵌 base64 方式包含图片，PDF 也会包含图片，适合发群。
+
+对话式入口位于 `src/untrusted/wechat_activity_report_tool.py`，使用 LangGraph 子图：
+
+```text
+route_intent -> parse_request -> resolve_contact -> build_report -> final_response
+```
+
+该入口支持用户自然表达，例如：
+
+```text
+帮我生成卫星互联网研究所（25级）一周聊天内容的活动总结
+帮我生成和寻徐今天的聊天内容的活动总结
+```
+
+`parse_request` 会同时提取对象和时间范围，并能从短期历史中补齐上一轮缺失槽位。对象可以出现在时间前或时间后。时间支持今天、昨天、前天、本周、上周、近一周和明确日期。
+
+当用户只给出联系人或群名时，工具通过 WeChatDataAnalysis API 查找 username：
+
+```text
+GET /api/chat/contacts?keyword=<对象名>&include_friends=true&include_groups=false&include_officials=false
+```
+
+常用环境变量：
 
 ```bash
-gramine-manifest -Dproject_dir=$(pwd) deployment/gramine/vault.manifest.template deployment/gramine/vault.manifest
-gramine-direct deployment/gramine/vault
+WECHAT_EXPORT_API_BASE
+WECHAT_REPORT_OUTPUT_ROOT
+WECHAT_EXPORT_BACKEND_OUTPUT_DIR
+WECHAT_REPORT_TODAY
 ```
 
-- 该阶段验证 vault server 能被 Gramine LibOS 托管运行。
-- 由于缺少 SGX 硬件，当前不继续推进 `gramine-sgx` 实测。
+## 开发和测试注意事项
 
-#### 6. 记忆存储（`src/trusted/memory_store.py`）——已进入 Gramine direct 运行边界
+- 优先使用 `rg` / `rg --files` 搜索。
+- 修改代码前先阅读现有模式，尽量保持小范围改动。
+- 不要提交真实 API key、用户 Fernet key、`vault_data/` 运行数据或微信导出隐私数据。
+- `deployment/gramine/vault.manifest` 是生成产物，可能含环境变量，不应公开。
+- Windows 和 Linux 间提交时注意 LF/CRLF 提示；通常只是 Git 行尾转换警告。
+- 运行测试前确认依赖可用；如果缺少 Redis 或 Python 包，不要自动安装，向用户说明。
 
-- 使用 **Fernet 对称加密**将记忆加密存储到 `memories.enc`。
-- 当前密钥文件为 `memory.key`，后续迁入 SGX 时需要改为 sealing / encrypted FS / attestation provisioning 方案。
-- 存储时调用 **DashScope `text-embedding-v4`** 将 `content` 向量化后一并存入，避免检索时重复编码记忆内容。
-- 使用 numpy 计算向量相似度做去重，当前阈值为 `0.8`。
-- 记录 `embedding_model` 字段，便于将来换模型时重新编码。
+常用检查：
 
-#### 7. 记忆检索器（`src/trusted/memory_retriever.py`）——已进入 Gramine direct 运行边界
-
-- 从加密存储中读取记忆，直接复用存储的向量。
-- 只对 query 做一次 embedding 编码。
-- 使用纯 numpy 余弦相似度计算，不依赖 FAISS，适配 TEE 有限内存。
-- 返回去除 `embedding` 字段后的召回结果，并附带相似度分数。
-
----
-
-### 当前架构的信任边界
-
-```text
-[TEE 外部 / untrusted]                 [TEE 内部 / trusted 目标]
-
-src/untrusted/chat_app.py                  src/trusted/vault_server.py
-src/untrusted/memory_extractor.py          src/trusted/memory_store.py
-src/interface/vault_api.py                 src/trusted/memory_retriever.py
-        │                                      │
-        │  store: 结构化记忆                   │
-        │ ───────────────────────────────────> │  加密存储 / 向量去重
-        │                                      │
-        │  retrieve: 当前 query                │
-        │ ───────────────────────────────────> │  向量检索 / Context Minimizer
-        │                                      │
-        │  脱敏后的 memory_context             │
-        │ <─────────────────────────────────── │
-        │
-        ▼
-组装 prompt → 外部 LLM API → 返回回复给用户
+```bash
+python -m compileall scripts src tests
+python tests/test_memory_lifecycle.py
+python tests/test_capability_security.py
+python tests/test_agent_service_capability.py
+python tests/test_client_provisioning.py
+python tests/test_high_level_client.py
+python tests/test_wechat_activity_report_tool.py
+python -m unittest src.tools.wechat_normalizer.tests.test_normalizer
 ```
 
-注意：当前 vault 已经可以由 Gramine direct 托管运行，但 direct 模式不提供 SGX 硬件隔离。`src/trusted/` 目前代表代码和运行边界，尚不代表真实 SGX 机密性保护。
+## 后续重点
 
----
-
-### 威胁模型
-
-| 攻击场景 | 当前应对方式 | 状态 |
-|---|---|---|
-| 长期攻击窃取用户画像 | 记忆存储、检索和最小化逻辑已进入 Gramine direct 运行边界 | direct 已跑通，SGX 待硬件环境 |
-| 宿主机读取记忆文件 | Fernet 加密 `memories.enc` | 原型可用，但 `memory.key` 仍需 TEE 保护 |
-| 单次对话明文拦截 | 目前接受该风险，认为时间窗口短、信息碎片化 | 已纳入模型 |
-| LLM 回复反射隐私 | vault server 内部执行 Context Minimizer，高敏感信息不原文出 TEE | 已实现 |
-| 助手回复污染长期记忆 | extractor 只分析用户原话，并校验 `source == "user"` | 已实现 |
-| 伪造记忆注入 | 计划通过 Remote Attestation 验证调用方/Extractor 来源 | 待实现 |
-| 外部 embedding 服务看到敏感文本 | 当前 store/retrieve 会调用 DashScope embedding | 需根据威胁模型进一步评估 |
-
----
-
-### 当前目录结构
-
-```text
-project/
-├── src/
-│   ├── client/
-│   ├── common/
-│   ├── interface/
-│   ├── trusted/
-│   └── untrusted/
-├── deployment/
-│   └── gramine/
-│       ├── vault.manifest.template
-│       └── vault.manifest
-├── docs/
-├── scripts/
-├── tests/
-├── vault_data/
-├── pyproject.toml
-├── requirements.txt
-└── README.md
-```
-
----
-
-### 下一步目标
-
-当前阶段已经完成 Gramine direct 原型验证。由于没有 SGX 硬件，下一阶段重点是整理 direct 阶段成果，并为未来 SGX 环境预留安全设计。
-
-具体任务：
-
-1. 记录并维护 Gramine direct 启动流程。
-2. 明确 Gramine 内的文件挂载策略，尤其是 `memories.enc` 和 `memory.key` 的位置。
-3. 收紧 manifest 中的文件挂载和依赖范围。
-4. 避免将真实 API key 写入生成后的 manifest。
-5. 在具备 SGX 硬件后切换到 `gramine-sgx`，验证 vault server 在 SGX enclave 内运行。
-6. 将长期密钥从普通文件方案迁移到 Gramine encrypted files、SGX sealing 或 attestation secret provisioning。
-7. 设计 Remote Attestation 流程，后续用于验证 vault 身份和密钥注入。
-8. 评估 DashScope embedding 在 TEE 内调用是否符合最终威胁模型；如不符合，考虑本地 embedding 或更严格的数据最小化。
-
----
-
-### 技术栈
-
-- 对话框架：LangGraph + LangChain
-- LLM / Embedding：通义千问 / DashScope API
-- 加密：Python `cryptography`（Fernet，当前原型）
-- TEE：Gramine（开发阶段 `gramine-direct`，目标 `gramine-sgx`）
-- 向量计算：numpy（无 FAISS 依赖，适配 TEE 内存限制）
+- 在真实 SGX 环境中从 `gramine-direct` 迁移到 `gramine-sgx`。
+- 将模拟 RA 替换为真实 remote attestation 或 RA-TLS。
+- 将 user key provisioning 绑定真实 attestation 结果和用户认证。
+- 评估 DashScope embedding/LLM 看到敏感文本是否符合最终威胁模型。
+- 收紧 Gramine manifest 挂载范围和环境变量暴露。
+- 为 capability 增加真实身份绑定、吊销和审计机制。

@@ -18,12 +18,14 @@ from untrusted.api_server import HandshakeRequest, ProvisionEnvelope
 
 def _assert(condition: bool, message: str) -> None:
     # 输入断言条件和消息；输出无返回值；作用是提供脚本式测试失败信息。
+    """在测试中断言条件成立。"""
     if not condition:
         raise AssertionError(message)
 
 
 def _reset_state(user_id: str) -> None:
     # 输入测试 user_id；输出无返回值；作用是清理 provisioning 测试产生的进程内状态。
+    """重置测试中的 vault 安全状态。"""
     with vault_server._SESSION_LOCK:
         vault_server._SESSIONS.clear()
     with vault_server._CAPABILITY_LOCK:
@@ -34,12 +36,14 @@ def _reset_state(user_id: str) -> None:
 
 def test_client_provisioning() -> None:
     # 输入无显式参数；输出无返回值；作用是贯通 Client SDK、FastAPI relay 和 Vault provisioning。
+    """验证 client_provisioning 的行为符合预期。"""
     user_id = f"client_test_{secrets.token_hex(4)}"
     client = VaultProvisioningClient("http://unused")
     original_relay = api_server.relay_vault_request
 
     def in_process_relay(request: dict[str, Any]) -> dict[str, Any]:
         # 输入 relay 请求；输出 vault data；作用是在测试进程内替代真实 socket transport。
+        """在进程内转发测试请求。"""
         response = vault_server.handle_request(request)
         if response.get("ok") is not True:
             raise AssertionError(response.get("error"))
@@ -47,6 +51,7 @@ def test_client_provisioning() -> None:
 
     def in_process_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
         # 输入 HTTP 路径和 payload；输出 endpoint 响应；作用是替代真实 HTTP 网络。
+        """在进程内转发测试请求。"""
         if path == "/vault/handshake":
             return api_server.relay_handshake(HandshakeRequest(**payload))
         if path == "/vault/provision":

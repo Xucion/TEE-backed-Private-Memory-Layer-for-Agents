@@ -93,6 +93,7 @@ VALID_PREDICATES = {
 
 def _canonicalize_content(content: str) -> str:
     # 输入原始记忆文本；输出第三人称规范化文本；作用是清理语气词并统一“用户”表述。
+    """规范化记忆内容中的用户称谓。"""
     content = content.strip()
     while content.endswith(TRAILING_PARTICLES):
         content = content[:-1].strip()
@@ -109,6 +110,7 @@ def _canonicalize_content(content: str) -> str:
 
 def _looks_like_user_fact(content: str) -> bool:
     # 输入规范化文本；输出是否像长期用户事实；作用是过滤问题、临时请求和元记忆询问。
+    """判断文本是否像可保存的用户事实。"""
     if any(marker in content for marker in META_MEMORY_MARKERS):
         return False
     if any(marker in content for marker in QUESTION_MARKERS):
@@ -120,6 +122,7 @@ def _looks_like_user_fact(content: str) -> bool:
 
 def _normalize_memories(data) -> list[dict]:
     # 输入 LLM JSON 数据；输出校验后的记忆列表；作用是规范字段并丢弃不可信候选。
+    """规范化记忆列表。"""
     if isinstance(data, dict):
         memories = data.get("memories", [])
     elif isinstance(data, list):
@@ -191,6 +194,7 @@ _EXTRACTOR_LLM_LOCK = threading.Lock()
 
 def _get_extractor_llm() -> ChatTongyi:
     # 输入环境中的模型配置；输出共享 extractor LLM；作用是避免模块导入时提前初始化外部客户端。
+    """返回用于记忆抽取的聊天模型实例。"""
     global _EXTRACTOR_LLM
     if _EXTRACTOR_LLM is not None:
         return _EXTRACTOR_LLM
@@ -208,6 +212,7 @@ def extract_memories(conversation: list[BaseMessage]) -> list[dict]:
 
     
     # Only user-authored text is eligible for long-term memory extraction.
+    """提取记忆列表。"""
     user_lines = []
     for msg in conversation:
         if isinstance(msg, HumanMessage):

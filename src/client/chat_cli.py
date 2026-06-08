@@ -11,6 +11,7 @@ from client.agent_client import AgentClientError, ConfidentialAgentClient
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="Confidential Agent Memory Vault 用户端"
     )
@@ -41,6 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """执行命令行入口。"""
     args = _build_parser().parse_args()
 
     try:

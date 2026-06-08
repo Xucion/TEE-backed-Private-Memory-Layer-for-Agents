@@ -99,6 +99,7 @@ class WeChatExportResult:
     job: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
+        """把导出结果转换为字典。"""
         return {
             "export_id": self.export_id,
             "status": self.status,
@@ -116,6 +117,7 @@ class WeChatExportApiClient:
         urlopen: Callable[..., Any] | None = None,
         request_timeout_seconds: int = 30,
     ) -> None:
+        """初始化当前对象。"""
         base = str(api_base or "").strip().rstrip("/")
         if not base:
             raise ValueError("api_base is required.")
@@ -138,6 +140,7 @@ class WeChatExportApiClient:
         privacy_mode: bool,
         export_name: str | None,
     ) -> dict[str, Any]:
+        """创建微信导出任务、job。"""
         payload = {
             "account": account or None,
             "scope": scope,
@@ -161,6 +164,7 @@ class WeChatExportApiClient:
         return job
 
     def get_export_job(self, export_id: str) -> dict[str, Any]:
+        """查询微信导出任务状态。"""
         export_id = str(export_id or "").strip()
         if not export_id:
             raise ValueError("export_id is required.")
@@ -177,6 +181,7 @@ class WeChatExportApiClient:
         timeout_seconds: int = 600,
         poll_interval_seconds: float = 1.0,
     ) -> dict[str, Any]:
+        """等待微信导出任务、job。"""
         deadline = time.monotonic() + max(1, int(timeout_seconds))
         last_job: dict[str, Any] | None = None
         while time.monotonic() <= deadline:
@@ -193,6 +198,7 @@ class WeChatExportApiClient:
         raise WeChatExportApiError(f"Timed out waiting for export job {export_id}: {last_job}")
 
     def download_export_zip(self, export_id: str, output_path: Path) -> Path:
+        """下载微信导出任务、ZIP 文件。"""
         export_id = str(export_id or "").strip()
         if not export_id:
             raise ValueError("export_id is required.")
@@ -212,6 +218,7 @@ class WeChatExportApiClient:
         return output_path
 
     def _json_request(self, method: str, path: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+        """向 WeChatDataAnalysis 发送 JSON 请求。"""
         data = None
         headers: dict[str, str] = {}
         if payload is not None:
@@ -235,10 +242,12 @@ class WeChatExportApiClient:
         return parsed
 
     def _url(self, path: str) -> str:
+        """拼接 WeChatDataAnalysis API URL。"""
         return self.api_base + "/" + str(path or "").lstrip("/")
 
 
 def export_wechat_chat(request: WeChatExportRequest) -> WeChatExportResult:
+    """调用 WeChatDataAnalysis 导出指定微信会话。"""
     client = WeChatExportApiClient(request.api_base)
     job = client.create_export_job(
         account=request.account,
@@ -305,6 +314,7 @@ def call_wechat_export_tool(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def extract_zip_safely(zip_path: Path, output_dir: Path) -> Path:
+    """提取ZIP 文件、safely。"""
     zip_path = zip_path.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -318,6 +328,7 @@ def extract_zip_safely(zip_path: Path, output_dir: Path) -> Path:
 
 
 def _export_stem(export_name: str | None, job: dict[str, Any], export_id: str) -> str:
+    """生成微信导出文件名主体。"""
     if export_name:
         return _strip_zip_suffix(_safe_name(export_name))
     zip_path = str(job.get("zipPath") or "").strip()
@@ -329,6 +340,7 @@ def _export_stem(export_name: str | None, job: dict[str, Any], export_id: str) -
 
 
 def _zip_file_name(export_name: str | None) -> str | None:
+    """生成导出 ZIP 文件名。"""
     if not export_name:
         return None
     safe = _safe_name(export_name)
@@ -338,10 +350,12 @@ def _zip_file_name(export_name: str | None) -> str | None:
 
 
 def _strip_zip_suffix(name: str) -> str:
+    """移除 ZIP 文件名后缀。"""
     return name[:-4] if name.lower().endswith(".zip") else name
 
 
 def _safe_name(value: str) -> str:
+    """生成安全的文件名片段。"""
     text = str(value or "").strip().replace("\\", "_").replace("/", "_")
     bad_chars = '<>:"|?*\x00'
     for ch in bad_chars:
@@ -350,17 +364,20 @@ def _safe_name(value: str) -> str:
 
 
 def _optional_str(value: Any) -> str | None:
+    """把可选值规范化为字符串。"""
     text = str(value or "").strip()
     return text or None
 
 
 def _optional_int(value: Any) -> int | None:
+    """把可选值规范化为整数。"""
     if value is None or value == "":
         return None
     return int(value)
 
 
 def _string_list(value: Any) -> list[str]:
+    """把输入值规范化为字符串列表。"""
     if isinstance(value, str):
         items = [value]
     else:
@@ -369,6 +386,7 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
+    """判断指定条件是否成立。"""
     try:
         path.relative_to(root)
         return True

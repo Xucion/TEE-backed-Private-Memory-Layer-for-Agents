@@ -23,6 +23,7 @@ from tools.wechat_normalizer.wechat_export_api import (
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="Build a shareable WeChat activity report from a JSON export."
     )
@@ -155,6 +156,7 @@ def build_report(
     timezone_offset: str = "+08:00",
     user_memories: list[str] | None = None,
 ) -> dict[str, Any]:
+    """编排本地微信活动报告生成流水线。"""
     export_root = export_dir.resolve()
     normalized_path = export_root / "normalized_messages.jsonl"
     normalization_report_path = export_root / "normalization_report.json"
@@ -268,6 +270,7 @@ def build_report_from_wechat_api(
     timezone_offset: str = "+08:00",
     user_memories: list[str] | None = None,
 ) -> dict[str, Any]:
+    """调用 WeChatDataAnalysis 导出会话并生成报告。"""
     export_result = export_wechat_chat(
         WeChatExportRequest(
             api_base=api_base,
@@ -301,11 +304,13 @@ def build_report_from_wechat_api(
 
 
 def _count_jsonl_records(path: Path) -> int:
+    """统计 JSONL 文件中的记录数。"""
     with path.open("r", encoding="utf-8-sig") as handle:
         return sum(1 for line in handle if line.strip())
 
 
 def main() -> None:
+    """执行命令行入口。"""
     args = build_parser().parse_args()
     if args.wechat_api:
         result = build_report_from_wechat_api(

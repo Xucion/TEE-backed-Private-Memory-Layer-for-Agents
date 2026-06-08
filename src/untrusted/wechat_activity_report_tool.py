@@ -52,6 +52,7 @@ class WeChatActivityReportToolCall:
 
 class WeChatReportGraphState(TypedDict, total=False):
     user_message: str
+    conversation_history: list[dict[str, str]]
     runner: Callable[..., dict[str, Any]]
     contact_resolver: Callable[[str, str, str | None], ContactResolution]
     handled: bool
@@ -81,6 +82,7 @@ _REPORT_GRAPH = None
 def try_handle_wechat_activity_report(
     user_message: str,
     *,
+    conversation_history: list[dict[str, str]] | None = None,
     runner: Callable[..., dict[str, Any]] = build_report_from_wechat_api,
     contact_resolver: Callable[[str, str, str | None], ContactResolution] | None = None,
 ) -> str | None:
@@ -90,6 +92,7 @@ def try_handle_wechat_activity_report(
     state = graph.invoke(
         {
             "user_message": str(user_message or "").strip(),
+            "conversation_history": conversation_history or [],
             "runner": runner,
             "contact_resolver": contact_resolver or resolve_contact_username,
         }
@@ -151,6 +154,7 @@ def build_wechat_activity_report_graph():
 
 class _FallbackGraphView:
     def __init__(self, nodes: list[str]) -> None:
+        """初始化当前对象。"""
         self.nodes = {name: object() for name in nodes}
 
 
@@ -165,9 +169,11 @@ class _FallbackWeChatReportGraph:
     _nodes = ["route_intent", "parse_request", "resolve_contact", "build_report", "final_response"]
 
     def get_graph(self) -> _FallbackGraphView:
+        """获取LangGraph 工作流。"""
         return _FallbackGraphView(self._nodes)
 
     def invoke(self, initial_state: dict[str, Any]) -> dict[str, Any]:
+        """调用当前函数的核心逻辑。"""
         state: WeChatReportGraphState = dict(initial_state)
         state.update(_route_intent_node(state))
         if _route_after_intent(state) == "parse_request":
@@ -183,6 +189,7 @@ class _FallbackWeChatReportGraph:
 
 
 def is_wechat_activity_report_request(user_message: str) -> bool:
+    """判断指定条件是否成立。"""
     return _looks_like_report_request(str(user_message or "").strip())
 
 
@@ -219,39 +226,47 @@ def resolve_contact_username(api_base: str, keyword: str, account: str | None = 
 
 
 def _route_intent_node(state: WeChatReportGraphState) -> dict[str, Any]:
+    """判断用户消息是否应进入微信报告子图。"""
     text = str(state.get("user_message") or "").strip()
     return {
-        "handled": _looks_like_report_request(text),
+        "handled": _looks_like_report_request(text) or _has_pending_report_context(state.get("conversation_history") or []),
         "reply": None,
         "error": None,
     }
 
 
 def _parse_request_node(state: WeChatReportGraphState) -> dict[str, Any]:
+    """解析请求数据、工作流节点。"""
     text = str(state.get("user_message") or "").strip()
-    account = _extract_named_value(text, "account", "账号")
-    username = _extract_named_value(text, "username", "会话")
+    context_text = _last_report_request_text(state.get("conversation_history") or [])
+    account = _extract_named_value(text, "account", "账号") or _extract_named_value(context_text, "account", "账号")
+    username = _extract_named_value(text, "username", "会话") or _extract_named_value(context_text, "username", "会话")
     api_base = (
         _extract_named_value(text, "wechat_api", "wechat-api", "api")
+        or _extract_named_value(context_text, "wechat_api", "wechat-api", "api")
         or os.getenv("WECHAT_EXPORT_API_BASE", DEFAULT_API_BASE)
     )
     output_root = Path(
         _extract_named_value(text, "output_root", "output-root")
+        or _extract_named_value(context_text, "output_root", "output-root")
         or os.getenv("WECHAT_REPORT_OUTPUT_ROOT", DEFAULT_OUTPUT_ROOT)
     )
     backend_output_dir = (
         _extract_named_value(text, "backend_output_dir", "backend-output-dir", "output_dir", "output-dir")
+        or _extract_named_value(context_text, "backend_output_dir", "backend-output-dir", "output_dir", "output-dir")
         or os.getenv("WECHAT_EXPORT_BACKEND_OUTPUT_DIR")
     )
 
     start_time, end_time, range_label = _extract_time_range(text)
+    if start_time is None or end_time is None:
+        start_time, end_time, range_label = _extract_time_range(context_text)
     if start_time is None or end_time is None:
         return {
             "error": "要生成微信活动报告，还需要时间范围，例如：一周、本周、上周，或 2026-06-07。",
             "reply": "要生成微信活动报告，还需要时间范围，例如：一周、本周、上周，或 2026-06-07。",
         }
 
-    target_name = _extract_target_name(text)
+    target_name = _extract_target_name(text) or _extract_target_name(context_text)
     if not username and not target_name:
         reply = "要生成微信活动报告，还需要群名或联系人名称，例如：卫星互联网研究所（25级）。"
         return {"error": reply, "reply": reply}
@@ -282,6 +297,7 @@ def _parse_request_node(state: WeChatReportGraphState) -> dict[str, Any]:
 
 
 def _resolve_contact_node(state: WeChatReportGraphState) -> dict[str, Any]:
+    """解析微信联系人或群名对应的 username。"""
     resolver = state.get("contact_resolver") or resolve_contact_username
     api_base = str(state.get("api_base") or DEFAULT_API_BASE)
     target_name = str(state.get("target_name") or "").strip()
@@ -301,6 +317,7 @@ def _resolve_contact_node(state: WeChatReportGraphState) -> dict[str, Any]:
 
 
 def _build_report_node(state: WeChatReportGraphState) -> dict[str, Any]:
+    """调用报告流水线生成微信活动报告。"""
     runner = state.get("runner") or build_report_from_wechat_api
     try:
         result = runner(
@@ -323,6 +340,7 @@ def _build_report_node(state: WeChatReportGraphState) -> dict[str, Any]:
 
 
 def _final_response_node(state: WeChatReportGraphState) -> dict[str, Any]:
+    """根据报告生成结果组装最终回复。"""
     if not state.get("handled"):
         return {"reply": None}
     if state.get("reply"):
@@ -358,10 +376,12 @@ def _final_response_node(state: WeChatReportGraphState) -> dict[str, Any]:
 
 
 def _route_after_intent(state: WeChatReportGraphState) -> Literal["parse_request", "final_response"]:
+    """决定意图识别后的下一个节点。"""
     return "parse_request" if state.get("handled") else "final_response"
 
 
 def _route_after_parse(state: WeChatReportGraphState) -> Literal["resolve_contact", "build_report", "final_response"]:
+    """决定请求解析后的下一个节点。"""
     if state.get("reply") or state.get("error"):
         return "final_response"
     if state.get("needs_contact_resolution"):
@@ -370,12 +390,14 @@ def _route_after_parse(state: WeChatReportGraphState) -> Literal["resolve_contac
 
 
 def _route_after_contact(state: WeChatReportGraphState) -> Literal["build_report", "final_response"]:
+    """决定联系人解析后的下一个节点。"""
     if state.get("reply") or state.get("error"):
         return "final_response"
     return "build_report"
 
 
 def _get_contacts(api_base: str, keyword: str, account: str | None, filters: dict[str, str]) -> dict[str, Any]:
+    """获取微信联系人列表。"""
     params = {"keyword": keyword, **filters}
     if account:
         params["account"] = account
@@ -400,11 +422,13 @@ def _get_contacts(api_base: str, keyword: str, account: str | None, filters: dic
 
 
 def _pick_contact(contacts: list[dict[str, Any]], keyword: str) -> dict[str, Any] | None:
+    """从候选联系人中选择最匹配的一项。"""
     normalized_keyword = _normalize_name(keyword)
     if not contacts:
         return None
 
     def score(item: dict[str, Any]) -> tuple[int, int]:
+        """计算当前函数的核心逻辑。"""
         names = [_contact_name(item), str(item.get("remark") or ""), str(item.get("nickname") or "")]
         normalized_names = [_normalize_name(name) for name in names if name]
         if normalized_keyword in normalized_names:
@@ -419,10 +443,12 @@ def _pick_contact(contacts: list[dict[str, Any]], keyword: str) -> dict[str, Any
 
 
 def _contact_name(item: dict[str, Any]) -> str:
+    """提取联系人可展示名称。"""
     return str(item.get("displayName") or item.get("remark") or item.get("nickname") or item.get("username") or "").strip()
 
 
 def _looks_like_report_request(text: str) -> bool:
+    """判断文本是否像微信活动报告请求。"""
     if not text:
         return False
     has_report_intent = any(keyword in text for keyword in REPORT_INTENT_KEYWORDS)
@@ -431,7 +457,31 @@ def _looks_like_report_request(text: str) -> bool:
     return has_report_intent and (has_wechat_context or has_explicit_params)
 
 
+def _has_pending_report_context(history: list[dict[str, str]]) -> bool:
+    """判断指定条件是否成立。"""
+    for item in reversed(history[-6:]):
+        role = item.get("role")
+        content = str(item.get("content") or "")
+        if role == "assistant" and "要生成微信活动报告，还需要" in content:
+            return True
+        if role == "user" and _looks_like_report_request(content):
+            return True
+    return False
+
+
+def _last_report_request_text(history: list[dict[str, str]]) -> str:
+    """从历史中取最近一次微信报告请求。"""
+    for item in reversed(history[-8:]):
+        if item.get("role") != "user":
+            continue
+        content = str(item.get("content") or "").strip()
+        if _looks_like_report_request(content):
+            return content
+    return ""
+
+
 def _extract_target_name(text: str) -> str | None:
+    """提取target、名称。"""
     explicit = _extract_named_value(text, "群名", "联系人", "会话名称")
     if explicit:
         return explicit
@@ -441,27 +491,41 @@ def _extract_target_name(text: str) -> str | None:
     if match:
         segment = match.group(1)
 
-    marker_patterns = [
+    target = _remove_target_noise(segment)
+    target = re.sub(r"^(?:和|跟|与)", "", target).strip(" ，,。；;：:的")
+    return target or None
+
+
+def _remove_target_noise(text: str) -> str:
+    """移除对象名称中的时间和报告关键词噪声。"""
+    target = str(text or "")
+    noise_patterns = [
+        r"20\d{2}[-/年]\d{1,2}[-/月]\d{1,2}日?\s*(?:到|至|-|~)\s*20\d{2}[-/年]\d{1,2}[-/月]\d{1,2}日?",
+        r"20\d{2}[-/年]\d{1,2}[-/月]\d{1,2}日?",
         r"最近一周",
         r"近一周",
         r"一周",
         r"本周",
         r"上周",
-        r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?",
+        r"今天",
+        r"今日",
+        r"昨天",
+        r"昨日",
+        r"前天",
+        r"微信",
         r"聊天内容",
         r"聊天记录",
-        r"的?活动(?:总结|汇总|报告)",
+        r"活动(?:总结|汇总|报告)",
+        r"事项(?:总结|汇总|报告)",
     ]
-    end = len(segment)
-    for pattern in marker_patterns:
-        found = re.search(pattern, segment)
-        if found:
-            end = min(end, found.start())
-    target = segment[:end].strip(" ，,。；;：:的")
-    return target or None
+    for pattern in noise_patterns:
+        target = re.sub(pattern, " ", target)
+    target = re.sub(r"\s+", "", target)
+    return target.strip(" ，,。；;：:的")
 
 
 def _extract_time_range(text: str) -> tuple[int | None, int | None, str]:
+    """提取time、时间范围。"""
     start_time = _extract_named_int(text, "start_time", "start-time")
     end_time = _extract_named_int(text, "end_time", "end-time")
     if start_time is not None and end_time is not None:
@@ -485,6 +549,20 @@ def _extract_time_range(text: str) -> tuple[int | None, int | None, str]:
         return start, end, single_day.isoformat()
 
     today = _local_today()
+    if _has_any(text, "今天", "今日"):
+        start, end = _day_bounds(today)
+        return start, end, today.isoformat()
+
+    if _has_any(text, "昨天", "昨日"):
+        day = today - timedelta(days=1)
+        start, end = _day_bounds(day)
+        return start, end, day.isoformat()
+
+    if "前天" in text:
+        day = today - timedelta(days=2)
+        start, end = _day_bounds(day)
+        return start, end, day.isoformat()
+
     if "上周" in text:
         this_monday = today - timedelta(days=today.weekday())
         start_day = this_monday - timedelta(days=7)
@@ -509,6 +587,7 @@ def _extract_time_range(text: str) -> tuple[int | None, int | None, str]:
 
 
 def _extract_named_value(text: str, *names: str) -> str | None:
+    """提取named、值。"""
     for name in names:
         pattern = rf"(?:{re.escape(name)})\s*[=:：]\s*([^\s,，;；]+)"
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -518,6 +597,7 @@ def _extract_named_value(text: str, *names: str) -> str | None:
 
 
 def _extract_named_int(text: str, *names: str) -> int | None:
+    """提取named、int。"""
     value = _extract_named_value(text, *names)
     if value is None:
         return None
@@ -528,6 +608,7 @@ def _extract_named_int(text: str, *names: str) -> int | None:
 
 
 def _extract_report_date(text: str) -> date | None:
+    """提取微信活动报告、日期。"""
     match = re.search(r"(20\d{2}[-/年]\d{1,2}[-/月]\d{1,2}日?)", text)
     if not match:
         return None
@@ -535,6 +616,7 @@ def _extract_report_date(text: str) -> date | None:
 
 
 def _parse_date_text(text: str) -> date | None:
+    """解析日期、文本。"""
     match = re.search(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?", text)
     if not match:
         return None
@@ -543,12 +625,14 @@ def _parse_date_text(text: str) -> date | None:
 
 
 def _day_bounds(day: date) -> tuple[int, int]:
+    """计算指定日期在本地时区的起止时间戳。"""
     start = datetime.combine(day, time.min, tzinfo=LOCAL_TZ)
     end = datetime.combine(day, time.max.replace(microsecond=0), tzinfo=LOCAL_TZ)
     return int(start.timestamp()), int(end.timestamp())
 
 
 def _local_today() -> date:
+    """返回本地时区今天的日期。"""
     override = os.getenv("WECHAT_REPORT_TODAY", "").strip()
     if override:
         parsed = _parse_date_text(override)
@@ -558,21 +642,25 @@ def _local_today() -> date:
 
 
 def _format_range(start_time: int, end_time: int) -> str:
+    """格式化时间戳范围。"""
     start = datetime.fromtimestamp(start_time, LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
     end = datetime.fromtimestamp(end_time, LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
     return f"{start} 至 {end}"
 
 
 def _normalize_name(value: str) -> str:
+    """规范化名称。"""
     return re.sub(r"\s+", "", str(value or "").strip()).lower()
 
 
 def _safe_export_part(value: str) -> str:
+    """生成适合文件名使用的导出名称片段。"""
     text = str(value or "").strip()
     text = re.sub(r'[<>:"/\\|?*\x00-\x1f\s]+', "_", text)
     return text.strip("_") or "wechat_chat"
 
 
 def _has_any(text: str, *needles: str) -> bool:
+    """判断指定条件是否成立。"""
     lowered = text.lower()
     return any(needle.lower() in lowered for needle in needles)

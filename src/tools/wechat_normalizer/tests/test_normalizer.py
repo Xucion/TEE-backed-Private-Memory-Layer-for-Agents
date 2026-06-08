@@ -211,6 +211,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         )
 
     def test_group_activity_payload_carries_related_images(self) -> None:
+        """验证 group_activity_payload_carries_related_images 的行为符合预期。"""
         group_id = next(
             message.context_group_id
             for message in self.result.messages
@@ -227,6 +228,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertIn("不要分析图片内容", payload["instruction"])
 
     def test_activity_response_normalization_keeps_evidence_and_images(self) -> None:
+        """验证 activity_response_normalization_keeps_evidence_and_images 的行为符合预期。"""
         group_id = next(
             message.context_group_id
             for message in self.result.messages
@@ -264,6 +266,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(activities[0]["related_images"][0]["message_id"], image_id)
 
     def test_optional_signup_is_not_forced_mandatory(self) -> None:
+        """验证 optional_signup_is_not_forced_mandatory 的行为符合预期。"""
         payload = {
             "context_group_id": "group_test",
             "messages": [
@@ -307,6 +310,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         )
 
     def test_activity_extractor_writes_jsonl_with_fake_model(self) -> None:
+        """验证 activity_extractor_writes_jsonl_with_fake_model 的行为符合预期。"""
         class FakeResponse:
             content = json.dumps(
                 {
@@ -328,6 +332,7 @@ class WeChatNormalizerTests(unittest.TestCase):
 
         class FakeModel:
             def invoke(self, messages):
+                """调用当前函数的核心逻辑。"""
                 payload = json.loads(messages[0].content)
                 first_message_id = payload["messages"][0]["message_id"]
                 data = json.loads(FakeResponse.content)
@@ -359,6 +364,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertIn("evidence_message_ids", rows[0])
 
     def test_activity_summary_merges_duplicates_and_images(self) -> None:
+        """验证 activity_summary_merges_duplicates_and_images 的行为符合预期。"""
         duplicate_a = {
             "schema_version": "wechat-extracted-activity/v1",
             "context_group_id": "group_1",
@@ -388,6 +394,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(merged[0]["confidence"], 0.9)
 
     def test_activity_summary_classifies_sections(self) -> None:
+        """验证 activity_summary_classifies_sections 的行为符合预期。"""
         summary = build_activity_summary(
             [
                 {
@@ -434,6 +441,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(len(summary["incomplete_items"]), 1)
 
     def test_summary_renderer_embeds_related_images(self) -> None:
+        """验证 summary_renderer_embeds_related_images 的行为符合预期。"""
         image_message = next(
             message
             for message in self.result.messages
@@ -467,6 +475,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertIn("空调折旧费缴纳通知", html_text)
 
     def test_pipeline_skip_extract_reuses_existing_activities(self) -> None:
+        """验证 pipeline_skip_extract_reuses_existing_activities 的行为符合预期。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_export = Path(temp_dir) / "export"
             shutil.copytree(SAMPLE_EXPORT, temp_export)
@@ -505,6 +514,7 @@ class WeChatNormalizerTests(unittest.TestCase):
             self.assertTrue((temp_export / "weekly_activity_summary.html").is_file())
 
     def test_api_export_result_can_feed_pipeline(self) -> None:
+        """验证 api_export_result_can_feed_pipeline 的行为符合预期。"""
         import tools.build_wechat_activity_report as report_builder
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -536,6 +546,7 @@ class WeChatNormalizerTests(unittest.TestCase):
             original = report_builder.export_wechat_chat
 
             def fake_export(_request):
+                """提供测试用的替身实现。"""
                 return WeChatExportResult(
                     export_id="export123",
                     status="done",
@@ -566,6 +577,7 @@ class WeChatNormalizerTests(unittest.TestCase):
             self.assertTrue((temp_export / "weekly_activity_summary.html").is_file())
 
     def test_api_export_zip_path_traversal_is_rejected(self) -> None:
+        """验证 api_export_zip_path_traversal_is_rejected 的行为符合预期。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             zip_path = root / "bad.zip"
@@ -576,11 +588,13 @@ class WeChatNormalizerTests(unittest.TestCase):
                 extract_zip_safely(zip_path, root / "out")
 
     def test_wechat_export_tool_facade_returns_structured_result(self) -> None:
+        """验证 wechat_export_tool_facade_returns_structured_result 的行为符合预期。"""
         import tools.wechat_normalizer.wechat_export_api as export_api
 
         original = export_api.export_wechat_chat
 
         def fake_export(request):
+            """提供测试用的替身实现。"""
             self.assertEqual(request.api_base, "http://127.0.0.1:10392")
             self.assertEqual(request.usernames, ["wxid_a6aq0g1v2g7f22"])
             return WeChatExportResult(

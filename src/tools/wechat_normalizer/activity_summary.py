@@ -10,6 +10,7 @@ SUMMARY_SCHEMA_VERSION = "wechat-activity-summary/v1"
 
 
 def load_extracted_activities(path: Path) -> list[dict[str, Any]]:
+    """从 JSONL 读取已提取的活动。"""
     activities: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8-sig") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -27,6 +28,7 @@ def build_activity_summary(
     *,
     source_path: str | None = None,
 ) -> dict[str, Any]:
+    """把活动列表合并成周报摘要结构。"""
     merged = merge_activities(activities)
     mandatory_tasks = [
         activity
@@ -96,6 +98,7 @@ def write_activity_summary(
     activities_path: Path,
     output_path: Path,
 ) -> dict[str, Any]:
+    """把活动汇总写入 JSON 文件。"""
     activities = load_extracted_activities(activities_path)
     summary = build_activity_summary(
         activities,
@@ -112,6 +115,7 @@ def write_activity_summary(
 def merge_activities(
     activities: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """合并活动列表。"""
     buckets: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for activity in activities:
         if not isinstance(activity, dict):
@@ -126,6 +130,7 @@ def merge_activities(
 
 
 def _dedupe_key(activity: dict[str, Any]) -> tuple[str, str, str, str]:
+    """生成活动去重 key。"""
     title = _normalize_key_text(activity.get("title"))
     deadline = _normalize_key_text(activity.get("deadline"))
     registration_url = _normalize_key_text(activity.get("registration_url"))
@@ -134,6 +139,7 @@ def _dedupe_key(activity: dict[str, Any]) -> tuple[str, str, str, str]:
 
 
 def _copy_activity(activity: dict[str, Any]) -> dict[str, Any]:
+    """复制活动记录以便合并。"""
     copied = json.loads(json.dumps(activity, ensure_ascii=False))
     copied["evidence_message_ids"] = _unique_strings(
         copied.get("evidence_message_ids", [])
@@ -150,6 +156,7 @@ def _merge_activity(
     left: dict[str, Any],
     right: dict[str, Any],
 ) -> dict[str, Any]:
+    """合并活动数据。"""
     merged = _copy_activity(left)
     for key in (
         "title",
@@ -192,12 +199,14 @@ def _merge_activity(
 
 
 def _prefer_value(current: Any, candidate: Any) -> Any:
+    """从两个候选值中选择更有信息量的一项。"""
     if current not in (None, "", []):
         return current
     return candidate
 
 
 def _unique_strings(values: Any) -> list[str]:
+    """保留字符串列表中的唯一非空项。"""
     if not isinstance(values, list):
         return []
     result = []
@@ -211,6 +220,7 @@ def _unique_strings(values: Any) -> list[str]:
 
 
 def _unique_images(values: Any) -> list[dict[str, Any]]:
+    """合并并去重相关图片列表。"""
     if not isinstance(values, list):
         return []
     result = []
@@ -227,6 +237,7 @@ def _unique_images(values: Any) -> list[dict[str, Any]]:
 
 
 def _sort_key(activity: dict[str, Any]) -> tuple[str, str, int, str]:
+    """生成活动排序 key。"""
     primary_time = (
         _optional_string(activity.get("deadline"))
         or _optional_string(activity.get("start_time"))
@@ -243,6 +254,7 @@ def _sort_key(activity: dict[str, Any]) -> tuple[str, str, int, str]:
 
 
 def _activity_confidence(activity: dict[str, Any]) -> float:
+    """读取活动置信度。"""
     try:
         return float(activity.get("confidence", 0.0))
     except (TypeError, ValueError):
@@ -250,15 +262,18 @@ def _activity_confidence(activity: dict[str, Any]) -> float:
 
 
 def _activity_identity(activity: dict[str, Any]) -> tuple[str, str, str, str]:
+    """生成活动合并身份标识。"""
     return _dedupe_key(activity)
 
 
 def _normalize_key_text(value: Any) -> str:
+    """规范化用于去重的文本 key。"""
     text = _optional_string(value) or ""
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def _optional_string(value: Any) -> str | None:
+    """把可选值规范化为字符串。"""
     if value is None:
         return None
     text = str(value).strip()

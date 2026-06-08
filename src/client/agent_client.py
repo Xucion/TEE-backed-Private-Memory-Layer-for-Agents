@@ -38,6 +38,7 @@ class ConfidentialAgentClient:
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         allow_no_vault: bool = False,
     ) -> None:
+        """初始化当前对象。"""
         self.user_id = self._validate_user_id(user_id)
         self.api_base_url = api_base_url.rstrip("/")
         self.session_id = session_id or f"conversation-{secrets.token_hex(8)}"
@@ -56,6 +57,7 @@ class ConfidentialAgentClient:
 
     @staticmethod
     def _validate_user_id(user_id: str) -> str:
+        """校验用户信息、id。"""
         normalized = str(user_id).strip()
         if not _USER_ID_RE.fullmatch(normalized):
             raise AgentClientError(
@@ -66,6 +68,7 @@ class ConfidentialAgentClient:
     @staticmethod
     def default_key_file(user_id: str) -> Path:
         # 每个用户使用独立文件，避免把长期密钥写入项目目录或 shell 历史。
+        """返回用户默认 Fernet key 文件路径。"""
         return (
             Path.home()
             / ".config"
@@ -75,6 +78,7 @@ class ConfidentialAgentClient:
         )
 
     def _resolve_user_key(self, user_key: bytes | str | None) -> bytes:
+        """读取或生成客户端本地用户 Fernet key。"""
         if user_key is not None:
             return VaultProvisioningClient._normalize_user_key(user_key)
 
@@ -91,6 +95,7 @@ class ConfidentialAgentClient:
         return self._write_new_key_file(Fernet.generate_key())
 
     def _write_new_key_file(self, key: bytes) -> bytes:
+        """把新生成的用户 key 写入本地文件。"""
         try:
             self.key_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(self.key_file.parent, 0o700)
@@ -117,6 +122,7 @@ class ConfidentialAgentClient:
         payload: dict[str, Any],
         headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        """向服务端发送 JSON 请求并返回响应。"""
         request_headers = {"Content-Type": "application/json"}
         request_headers.update(headers or {})
         request = urllib.request.Request(
@@ -150,6 +156,7 @@ class ConfidentialAgentClient:
         return data
 
     def provision(self, force: bool = False) -> ProvisionedVaultAccess | None:
+        """注入当前函数的核心逻辑。"""
         if self._no_vault_mode:
             return None
 
@@ -185,6 +192,7 @@ class ConfidentialAgentClient:
         return access
 
     def chat(self, message: str) -> str:
+        """发送聊天请求并返回助手回复。"""
         message = message.strip()
         if not message:
             raise AgentClientError("消息不能为空")

@@ -13,6 +13,7 @@ from tools.wechat_normalizer.activity_extractor import extract_activities_from_j
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="Run LLM extraction over normalized WeChat messages."
     )
@@ -52,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """执行命令行入口。"""
     args = build_parser().parse_args()
     input_path = args.input.resolve()
     output_path = (

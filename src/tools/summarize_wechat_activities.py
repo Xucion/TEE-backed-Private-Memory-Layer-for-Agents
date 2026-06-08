@@ -13,6 +13,7 @@ from tools.wechat_normalizer.activity_summary import write_activity_summary
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="Merge extracted WeChat activities into a structured summary."
     )
@@ -31,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """执行命令行入口。"""
     args = build_parser().parse_args()
     input_path = args.input.resolve()
     output_path = (

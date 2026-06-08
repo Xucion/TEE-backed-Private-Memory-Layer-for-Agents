@@ -19,6 +19,7 @@ def render_summary_files(
     pdf_path: Path | None = None,
     make_pdf: bool = True,
 ) -> dict[str, Any]:
+    """渲染活动汇总、files。"""
     summary_path = summary_path.resolve()
     export_root = summary_path.parent
     summary = json.loads(summary_path.read_text(encoding="utf-8-sig"))
@@ -48,6 +49,7 @@ def render_summary_files(
 
 
 def render_summary_html(summary: dict[str, Any], export_root: Path) -> str:
+    """渲染活动汇总、html。"""
     counts = summary.get("counts", {})
     sections = [
         ("必须完成", "mandatory_tasks", "必须"),
@@ -106,6 +108,7 @@ def render_summary_html(summary: dict[str, Any], export_root: Path) -> str:
 
 
 def render_pdf_with_browser(html_path: Path, pdf_path: Path) -> bool:
+    """渲染pdf、with、browser。"""
     browser = _find_browser()
     if browser is None:
         raise RuntimeError("No Chrome/Edge/Chromium executable found for PDF export.")
@@ -134,6 +137,7 @@ def render_pdf_with_browser(html_path: Path, pdf_path: Path) -> bool:
 
 
 def _render_item(item: dict[str, Any], export_root: Path, badge: str) -> str:
+    """渲染item。"""
     title = _text(item.get("title")) or "未命名事项"
     rows = [
         ("截止", _text(item.get("deadline"))),
@@ -174,6 +178,7 @@ def _render_item(item: dict[str, Any], export_root: Path, badge: str) -> str:
 
 
 def _render_images(images: Any, export_root: Path) -> str:
+    """渲染图片列表。"""
     if not isinstance(images, list) or not images:
         return ""
     rendered = []
@@ -208,6 +213,7 @@ def _render_images(images: Any, export_root: Path) -> str:
 
 
 def _image_data_uri(export_root: Path, image: dict[str, Any]) -> str | None:
+    """把图片文件编码为 data URI。"""
     relative_path = _text(image.get("relative_path"))
     if not relative_path:
         return None
@@ -225,6 +231,7 @@ def _image_data_uri(export_root: Path, image: dict[str, Any]) -> str | None:
 
 
 def _find_browser() -> Path | None:
+    """查找可用于渲染 PDF 的浏览器。"""
     names = ("chrome", "chrome.exe", "msedge", "msedge.exe", "chromium", "chromium.exe")
     for name in names:
         found = shutil.which(name)
@@ -240,6 +247,7 @@ def _find_browser() -> Path | None:
 
 
 def _date_range(item: dict[str, Any]) -> str | None:
+    """格式化摘要中的日期范围。"""
     start = _text(item.get("start_date"))
     end = _text(item.get("end_date"))
     if start and end:
@@ -248,6 +256,7 @@ def _date_range(item: dict[str, Any]) -> str | None:
 
 
 def _dimension_text(image: dict[str, Any]) -> str | None:
+    """格式化图片尺寸文本。"""
     width = image.get("width")
     height = image.get("height")
     if width and height:
@@ -256,6 +265,7 @@ def _dimension_text(image: dict[str, Any]) -> str | None:
 
 
 def _link(value: Any) -> str | None:
+    """渲染报告中的链接字段。"""
     text = _text(value)
     if not text:
         return None
@@ -264,6 +274,7 @@ def _link(value: Any) -> str | None:
 
 
 def _stat(label: str, value: Any) -> str:
+    """渲染报告顶部的统计项。"""
     return (
         '<div class="stat">'
         f'<strong>{html.escape(str(value))}</strong>'
@@ -273,10 +284,12 @@ def _stat(label: str, value: Any) -> str:
 
 
 def _count(counts: dict[str, Any], key: str) -> str:
+    """统计指定摘要列表的数量。"""
     return html.escape(str(counts.get(key, 0)))
 
 
 def _text(value: Any) -> str | None:
+    """HTML 转义并格式化文本。"""
     if value is None:
         return None
     text = str(value).strip()
@@ -284,6 +297,7 @@ def _text(value: Any) -> str | None:
 
 
 def _css() -> str:
+    """返回活动报告页面 CSS。"""
     return """
 @page { size: A4; margin: 16mm; }
 * { box-sizing: border-box; }

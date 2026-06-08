@@ -22,20 +22,24 @@ _embeddings = DashScopeEmbeddings(model=EMBEDDING_MODEL)
 
 def _memory_file_for_user(user_id: str) -> Path:
     # 输入用户标识；输出该用户加密记忆文件路径；作用是实现 per-user 文件隔离。
+    """计算指定用户的加密记忆文件路径。"""
     return MEMORY_DIR / f"{user_id}.memories.enc"
 
 def _normalize(vec: np.ndarray) -> np.ndarray:
     # 输入 numpy 向量；输出单位化向量；作用是为向量相似度计算做归一化。
+    """规范化当前函数的核心逻辑。"""
     norm = np.linalg.norm(vec)
     return vec / max(norm, 1e-9)
 
 def _normalize_key_part(value: object) -> str:
     # 输入任意键片段值；输出小写下划线文本；作用是构造稳定 fact/conflict key。
+    """把 key 片段规范化为可比较文本。"""
     text = str(value or "").strip().lower()
     return "_".join(text.split())
 
 def _load_memories(user_id: str, user_key: bytes) -> list[dict]:
     # 输入用户标识和 Fernet key；输出解密后的记忆列表；作用是读取该用户的加密记忆文件。
+    """读取并解密指定用户的记忆文件。"""
     memory_file = _memory_file_for_user(user_id)
     if not memory_file.exists():
         return []
@@ -48,6 +52,7 @@ def _load_memories(user_id: str, user_key: bytes) -> list[dict]:
 
 def _save_memories(user_id: str, user_key: bytes, memories: list[dict]) -> None:
     # 输入用户标识、Fernet key 和记忆列表；输出无返回值；作用是加密写回该用户记忆文件。
+    """加密并保存指定用户的记忆文件。"""
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     fernet = Fernet(user_key)
     encrypted = fernet.encrypt(json.dumps(memories, ensure_ascii=False).encode())
@@ -56,6 +61,7 @@ def _save_memories(user_id: str, user_key: bytes, memories: list[dict]) -> None:
 
 def _find_embedding_duplicate(new_vec: np.ndarray, existing: list[dict], record: dict, threshold: float = 0.9,) -> dict | None:
     # 输入新向量、已有记忆和新记录；输出重复记忆或 None；作用是在同类槽位内查找语义重复。
+    """查找 embedding 语义重复的 active 记忆。"""
     active_memories = [
         m for m in existing
         if m.get("status", ACTIVE_STATUS) == ACTIVE_STATUS
@@ -86,6 +92,7 @@ def _find_embedding_duplicate(new_vec: np.ndarray, existing: list[dict], record:
 
 def _parse_datetime(value: object) -> datetime | None:
     # 输入任意时间值；输出 UTC datetime 或 None；作用是解析 expires_at 等 ISO 时间字段。
+    """解析datetime。"""
     if not isinstance(value, str) or not value.strip():
         return None
     text = value.strip()
@@ -101,6 +108,7 @@ def _parse_datetime(value: object) -> datetime | None:
 
 def _is_expired(memory: dict, now: datetime | None = None) -> bool:
     # 输入记忆和可选当前时间；输出是否过期；作用是判断 active 记忆是否超过 expires_at。
+    """判断指定条件是否成立。"""
     expires_at = _parse_datetime(memory.get("expires_at"))
     if expires_at is None:
         return False
@@ -109,6 +117,7 @@ def _is_expired(memory: dict, now: datetime | None = None) -> bool:
 
 def _apply_expiration(memories: list[dict]) -> tuple[list[dict], bool]:
     # 输入记忆列表；输出更新后的列表和是否变化；作用是把已过期 active 记忆标记为 expired。
+    """把已过期的 active 记忆标记为 expired。"""
     now = datetime.now(timezone.utc)
     changed = False
 
@@ -126,6 +135,7 @@ def _apply_expiration(memories: list[dict]) -> tuple[list[dict], bool]:
 
 def _build_fact_key(mem: dict) -> str:
     # 输入记忆记录；输出稳定事实键；作用是识别可合并的同一事实。
+    """为可合并事实生成稳定 fact_key。"""
     memory_type = _normalize_key_part(mem.get("memory_type", "other"))
     subject = _normalize_key_part(mem.get("subject", "user"))
     predicate = _normalize_key_part(mem.get("predicate", "stated_fact"))
@@ -134,6 +144,7 @@ def _build_fact_key(mem: dict) -> str:
 
 def _build_conflict_key(mem: dict) -> str:
     # 输入记忆记录；输出冲突键；作用是识别互斥槽位中的旧事实。
+    """为互斥事实生成冲突检测 key。"""
     subject = _normalize_key_part(mem.get("subject", "user"))
     slot = _normalize_key_part(mem.get("slot"))
     if slot:
@@ -142,6 +153,7 @@ def _build_conflict_key(mem: dict) -> str:
 
 def _find_active_by_fact_key(memories: list[dict], fact_key: str) -> dict | None:
     # 输入记忆列表和事实键；输出匹配 active 记忆或 None；作用是查找可合并的已有事实。
+    """按 fact_key 查找 active 记忆。"""
     for memory in memories:
         if memory.get("status", ACTIVE_STATUS) != ACTIVE_STATUS:
             continue
@@ -151,6 +163,7 @@ def _find_active_by_fact_key(memories: list[dict], fact_key: str) -> dict | None
 
 def _find_active_conflicts(memories: list[dict], record: dict) -> list[dict]:
     # 输入记忆列表和新记录；输出冲突 active 记忆列表；作用是查找同槽位但不同事实的旧记录。
+    """查找与新记忆冲突的 active 记忆。"""
     conflicts = []
     for memory in memories:
         if memory.get("status", ACTIVE_STATUS) != ACTIVE_STATUS:
@@ -164,6 +177,7 @@ def _find_active_conflicts(memories: list[dict], record: dict) -> list[dict]:
 
 def _supersede_conflicts(conflicts: list[dict], incoming: dict) -> None:
     # 输入冲突记忆和新记录；输出无返回值；作用是将旧冲突记忆标记为 superseded。
+    """把冲突旧记忆标记为 superseded。"""
     now = datetime.now().isoformat()
     incoming.setdefault("supersedes", [])
 
@@ -179,6 +193,7 @@ def list_memories(
     user_key: bytes,
     status: str | None = None,
 ) -> list[dict]:
+    """列出记忆列表。"""
     memories = load_all_memories(user_id, user_key)
 
     if status:
@@ -198,6 +213,7 @@ def list_memories(
 
 def touch_memories(user_id: str, user_key: bytes, memory_ids: list[str]) -> None:
     # 输入用户标识、密钥和记忆 ID 列表；输出无返回值；作用是更新检索访问时间和计数。
+    """更新记忆列表。"""
     if not memory_ids:
         return
     target_ids = set(memory_ids)
@@ -215,6 +231,7 @@ def touch_memories(user_id: str, user_key: bytes, memory_ids: list[str]) -> None
 
 def _merge_memory(existing: dict, incoming: dict) -> None:
     # 输入已有记忆和新记忆；输出无返回值；作用是合并证据次数、时间戳和置信度。
+    """合并记忆数据。"""
     now = datetime.now().isoformat()
 
     existing["evidence_count"] = int(existing.get("evidence_count", 1)) + 1
@@ -232,6 +249,7 @@ def forget_memories(
     memory_ids: list[str],
     reason: str = "user_requested",
 ) -> int:
+    """遗忘记忆列表。"""
     if not memory_ids:
         return 0
     
@@ -259,6 +277,7 @@ def forget_memories(
 
 def _build_memory_record(mem: dict, embedding: list[float]) -> dict:
     # 输入规范化记忆和 embedding；输出完整存储记录；作用是补齐 schema、生命周期和索引字段。
+    """构造带元数据和 embedding 的记忆记录。"""
     now = datetime.now().isoformat()
     confidence = float(mem.get("confidence", 0.8))
 
@@ -303,6 +322,7 @@ def _build_memory_record(mem: dict, embedding: list[float]) -> dict:
 
 def store_memories(user_id: str, user_key: bytes, new_memories: list[dict]) -> int:
     # 输入用户标识、密钥和新记忆列表；输出变更数量；作用是加密存储并处理合并、冲突和去重。
+    """向 vault 写入一组结构化记忆。"""
     if not new_memories:
         return 0
     existing = _load_memories(user_id, user_key)
@@ -345,6 +365,7 @@ def store_memories(user_id: str, user_key: bytes, new_memories: list[dict]) -> i
 
 def load_all_memories(user_id: str, user_key: bytes) -> list[dict]:
     # 输入用户标识和密钥；输出该用户全部记忆；作用是读取记忆并自动应用过期状态更新。
+    """加载指定用户的全部记忆记录。"""
     memories = _load_memories(user_id, user_key)
     memories, changed = _apply_expiration(memories)
 

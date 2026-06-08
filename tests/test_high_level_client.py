@@ -17,9 +17,11 @@ from client.vault_client import ProvisionedVaultAccess, VaultClientError
 
 class FakeProvisioningClient:
     def __init__(self) -> None:
+        """初始化当前对象。"""
         self.calls = 0
 
     def provision(self, user_id: str, user_key: bytes) -> ProvisionedVaultAccess:
+        """注入当前函数的核心逻辑。"""
         self.calls += 1
         return ProvisionedVaultAccess(
             user_id=user_id,
@@ -31,15 +33,18 @@ class FakeProvisioningClient:
 
 class FailingProvisioningClient:
     def provision(self, user_id: str, user_key: bytes) -> ProvisionedVaultAccess:
+        """注入当前函数的核心逻辑。"""
         raise VaultClientError("vault unavailable")
 
 
 def _assert(condition: bool, message: str) -> None:
+    """在测试中断言条件成立。"""
     if not condition:
         raise AssertionError(message)
 
 
 def test_high_level_client() -> None:
+    """验证 high_level_client 的行为符合预期。"""
     with tempfile.TemporaryDirectory() as temp_dir:
         key_file = Path(temp_dir) / "alice.key"
         client = ConfidentialAgentClient(
@@ -54,6 +59,7 @@ def test_high_level_client() -> None:
         seen_capabilities: list[str] = []
 
         def successful_post(path, payload, headers=None):
+            """模拟成功的测试响应。"""
             seen_capabilities.append(headers["X-Vault-Capability"])
             return {"reply": f"收到: {payload['message']}"}
 
@@ -77,6 +83,7 @@ def test_high_level_client() -> None:
         attempts = 0
 
         def retrying_post(path, payload, headers=None):
+            """模拟需要重试的测试响应。"""
             nonlocal attempts
             attempts += 1
             if attempts == 1:
@@ -94,6 +101,7 @@ def test_high_level_client() -> None:
 
 
 def test_high_level_client_no_vault_mode() -> None:
+    """验证 high_level_client_no_vault_mode 的行为符合预期。"""
     with tempfile.TemporaryDirectory() as temp_dir:
         client = ConfidentialAgentClient(
             user_id="alice",
@@ -107,6 +115,7 @@ def test_high_level_client_no_vault_mode() -> None:
         seen_headers: list[dict] = []
 
         def successful_post(path, payload, headers=None):
+            """模拟成功的测试响应。"""
             seen_headers.append(headers or {})
             return {"reply": f"无 vault: {payload['message']}"}
 

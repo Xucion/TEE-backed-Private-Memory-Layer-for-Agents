@@ -7,12 +7,14 @@ _embeddings = DashScopeEmbeddings(model="text-embedding-v4")
 
 def _normalize(vec: np.ndarray) -> np.ndarray:
     # 输入 numpy 向量；输出单位化向量；作用是为余弦相似度计算做归一化。
+    """规范化当前函数的核心逻辑。"""
     norm = np.linalg.norm(vec)
     return vec / max(norm, 1e-9)
 
 
 def retrieve(user_id: str, user_key: bytes, query: str, top_k: int = 3, threshold: float = 0.4) -> list[dict]:
     # 输入用户标识、密钥、查询和检索参数；输出匹配记忆列表；作用是按向量相似度召回 active 记忆。
+    """按 embedding 相似度检索 active 记忆。"""
     memories = [
         m for m in load_all_memories(user_id, user_key)
         if m.get("status", ACTIVE_STATUS) == ACTIVE_STATUS

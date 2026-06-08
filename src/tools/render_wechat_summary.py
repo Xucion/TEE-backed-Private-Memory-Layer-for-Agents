@@ -13,6 +13,7 @@ from tools.wechat_normalizer.summary_renderer import render_summary_files
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="Render weekly WeChat activity summary as shareable HTML/PDF."
     )
@@ -41,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """执行命令行入口。"""
     args = build_parser().parse_args()
     result = render_summary_files(
         args.input,

@@ -33,11 +33,13 @@ class ProvisionedVaultAccess:
 class VaultProvisioningClient:
     def __init__(self, api_base_url: str, timeout_seconds: float = 10.0) -> None:
         # 输入 FastAPI 地址和超时；输出客户端实例；作用是配置只经 relay 的 provisioning 客户端。
+        """初始化当前对象。"""
         self._api_base_url = api_base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
 
     def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         # 输入 HTTP 路径和 JSON 对象；输出响应对象；作用是调用 FastAPI relay 而不泄露本地信道密钥。
+        """向服务端发送 JSON 请求并返回响应。"""
         request = urllib.request.Request(
             f"{self._api_base_url}{path}",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -60,6 +62,7 @@ class VaultProvisioningClient:
         user_key: bytes | str | None = None,
     ) -> ProvisionedVaultAccess:
         # 输入 user_id 和可选 Fernet key；输出 capability；作用是在客户端完成 RA 验证和端到端 key 注入。
+        """注入当前函数的核心逻辑。"""
         normalized_key = self._normalize_user_key(user_key)
         nonce = secrets.token_urlsafe(24)
         client_private_key, client_public_key = generate_x25519_keypair()
@@ -134,6 +137,7 @@ class VaultProvisioningClient:
     @staticmethod
     def _normalize_user_key(user_key: bytes | str | None) -> bytes:
         # 输入可选 Fernet key；输出合法 key 字节串；作用是由客户端生成或校验长期记忆密钥。
+        """校验并返回客户端使用的 Fernet key。"""
         if user_key is None:
             return Fernet.generate_key()
         if isinstance(user_key, str):

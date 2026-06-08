@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _print_help() -> None:
+    """打印记忆管理命令帮助。"""
     print(
         """
 Memory management commands:
@@ -44,6 +45,7 @@ Memory management commands:
 
 
 def _format_memory(memory: dict[str, Any]) -> str:
+    """格式化单条记忆用于终端展示。"""
     memory_id = str(memory.get("id", "")).strip() or "<missing-id>"
     content = str(memory.get("content", "")).strip()
     memory_type = str(memory.get("memory_type", "other")).strip()
@@ -68,6 +70,7 @@ def _format_memory(memory: dict[str, Any]) -> str:
 
 
 def _print_memories(memories: list[dict[str, Any]]) -> None:
+    """打印记忆列表或空结果提示。"""
     if not memories:
         print("没有找到匹配的 memory。")
         return
@@ -77,6 +80,7 @@ def _print_memories(memories: list[dict[str, Any]]) -> None:
 
 
 def _list_memories(session: dict[str, Any], user_id: str, status: str | None) -> None:
+    """列出记忆列表。"""
     memories = secure_list_user_memories(session, user_id, status=status)
     title = "all" if status is None else status
     print(f"\n{title} memories: {len(memories)}")
@@ -84,6 +88,7 @@ def _list_memories(session: dict[str, Any], user_id: str, status: str | None) ->
 
 
 def _forget_memories(session: dict[str, Any], user_id: str, memory_ids: list[str]) -> None:
+    """遗忘记忆列表。"""
     clean_ids = [memory_id.strip() for memory_id in memory_ids if memory_id.strip()]
     if not clean_ids:
         print("用法：/forget <memory_id> [memory_id...]")
@@ -94,6 +99,7 @@ def _forget_memories(session: dict[str, Any], user_id: str, memory_ids: list[str
 
 
 def _parse_list_status(parts: list[str]) -> str | None:
+    """解析list、状态。"""
     if len(parts) == 1:
         return DEFAULT_STATUS
 
@@ -107,6 +113,7 @@ def _parse_list_status(parts: list[str]) -> str | None:
 
 
 def _open_session() -> dict[str, Any] | None:
+    """打开安全会话。"""
     user_id = os.getenv("VAULT_USER_ID", "default_user")
     user_key = os.getenv("USER_MEMORY_KEY")
 
@@ -125,6 +132,7 @@ def _open_session() -> dict[str, Any] | None:
 
 
 def main() -> None:
+    """执行命令行入口。"""
     session = _open_session()
     if session is None:
         return

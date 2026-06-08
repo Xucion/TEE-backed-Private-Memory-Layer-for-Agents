@@ -11,6 +11,7 @@ from trusted.memory_store import load_all_memories
 
 def _arg_or_env(index: int, env_name: str) -> str | None:
     # 输入命令行参数位置和环境变量名；输出字符串或 None；作用是优先读取参数再回退到环境变量。
+    """读取命令行参数或环境变量中的配置值。"""
     if len(sys.argv) > index:
         return sys.argv[index]
     return os.getenv(env_name)

@@ -89,10 +89,12 @@ DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T00:00:00(?:[+-]\d{2}:\d{2}|Z)?
 
 class ChatModel(Protocol):
     def invoke(self, messages: list[HumanMessage]) -> Any:
+        """调用当前函数的核心逻辑。"""
         ...
 
 
 def load_normalized_messages(path: Path) -> list[dict[str, Any]]:
+    """从 JSONL 读取规范化后的微信消息。"""
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8-sig") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -111,6 +113,7 @@ def iter_group_payloads(
     minimum_candidate_score: float = 0.3,
     include_all: bool = False,
 ) -> Iterable[dict[str, Any]]:
+    """按时间段迭代发送给 LLM 的活动提取载荷。"""
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         context_group_id = record.get("context_group_id")
@@ -156,6 +159,7 @@ def build_group_payload(
     context_group_id: str,
     records: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """构造单个时间段发送给 LLM 的载荷。"""
     messages = []
     images = []
     for record in records:
@@ -217,6 +221,7 @@ def extract_activities_from_jsonl(
     dry_run_payloads: Path | None = None,
     chat_model: ChatModel | None = None,
 ) -> int:
+    """提取活动列表、from、jsonl。"""
     records = load_normalized_messages(normalized_jsonl)
     payloads = list(
         iter_group_payloads(
@@ -252,6 +257,7 @@ def normalize_activity_response(
     data: Any,
     payload: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """校验并规范化 LLM 返回的活动列表。"""
     raw_activities = _raw_activities(data)
     message_by_id = {
         str(message["message_id"]): message
@@ -362,12 +368,14 @@ def normalize_activity_response(
 
 
 def _build_chat_model(model_name: str | None = None) -> ChatTongyi:
+    """构建活动提取使用的聊天模型。"""
     if not os.getenv("DASHSCOPE_API_KEY"):
         raise EnvironmentError("Missing DASHSCOPE_API_KEY. Set it before extraction.")
     return ChatTongyi(model=model_name or os.getenv("TONGYI_MODEL", "qwen-turbo"))
 
 
 def _invoke_llm(llm: ChatModel, payload: dict[str, Any]) -> str:
+    """调用llm。"""
     prompt = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     response = llm.invoke([HumanMessage(content=prompt)])
     content = getattr(response, "content", response)
@@ -377,6 +385,7 @@ def _invoke_llm(llm: ChatModel, payload: dict[str, Any]) -> str:
 
 
 def _parse_llm_json(text: str) -> Any:
+    """解析llm、JSON 数据。"""
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
     cleaned = re.sub(r"\s*```$", "", cleaned)
@@ -390,6 +399,7 @@ def _parse_llm_json(text: str) -> Any:
 
 
 def _raw_activities(data: Any) -> list[Any]:
+    """从 LLM 响应中取出原始活动列表。"""
     if isinstance(data, dict):
         activities = data.get("activities", [])
         return activities if isinstance(activities, list) else []
@@ -399,6 +409,7 @@ def _raw_activities(data: Any) -> list[Any]:
 
 
 def _candidate_score(record: dict[str, Any]) -> float:
+    """计算文本时间段进入 LLM 的候选分数。"""
     try:
         return float(record.get("activity_features", {}).get("candidate_score", 0.0))
     except (TypeError, ValueError):
@@ -406,6 +417,7 @@ def _candidate_score(record: dict[str, Any]) -> float:
 
 
 def _message_text(record: dict[str, Any]) -> str:
+    """提取规范化消息的文本内容。"""
     parts = [
         record.get("title"),
         record.get("text"),
@@ -415,6 +427,7 @@ def _message_text(record: dict[str, Any]) -> str:
 
 
 def _optional_string(value: Any) -> str | None:
+    """把可选值规范化为字符串。"""
     if value is None:
         return None
     text = str(value).strip()
@@ -422,6 +435,7 @@ def _optional_string(value: Any) -> str | None:
 
 
 def _string_list(value: Any) -> list[str]:
+    """把输入值规范化为字符串列表。"""
     if not isinstance(value, list):
         return []
     result = []
@@ -436,6 +450,7 @@ def _evidence_text(
     evidence_ids: list[str],
     message_by_id: dict[str, dict[str, Any]],
 ) -> str:
+    """生成活动证据的可读文本。"""
     parts = []
     for message_id in evidence_ids:
         message = message_by_id.get(message_id)
@@ -455,6 +470,7 @@ def _normalize_mandatory(
     evidence_text: str,
     evidence_quote: str | None,
 ) -> bool:
+    """规范化mandatory。"""
     evidence = "\n".join(part for part in (evidence_quote, evidence_text) if part)
     has_mandatory_signal = any(signal in evidence for signal in MANDATORY_SIGNALS)
     has_optional_signal = any(signal in evidence for signal in OPTIONAL_SIGNALS)
@@ -473,6 +489,7 @@ def _normalize_mandatory(
 
 
 def _has_strong_mandatory_action(text: str) -> bool:
+    """判断指定条件是否成立。"""
     return bool(
         re.search(r"(必须|务必|不得|请于|截止)", text)
         or re.search(r"(提交|填写|完成|缴费|缴纳)", text)
@@ -480,6 +497,7 @@ def _has_strong_mandatory_action(text: str) -> bool:
 
 
 def _normalize_date_only(value: Any) -> str | None:
+    """规范化只包含日期的字符串。"""
     text = _optional_string(value)
     if not text:
         return None
@@ -488,6 +506,7 @@ def _normalize_date_only(value: Any) -> str | None:
 
 
 def _normalize_datetime_or_date(value: Any) -> str | None:
+    """规范化日期或日期时间字符串。"""
     text = _optional_string(value)
     if not text:
         return None
@@ -502,6 +521,7 @@ def _infer_date_range(
     evidence_ids: list[str],
     message_by_id: dict[str, dict[str, Any]],
 ) -> tuple[str | None, str | None]:
+    """根据活动时间推断日期范围。"""
     match = re.search(
         r"(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*[-–—至到]\s*(?:(\d{1,2})\s*月\s*)?(\d{1,2})\s*日",
         evidence_text,
@@ -525,6 +545,7 @@ def _evidence_year(
     evidence_ids: list[str],
     message_by_id: dict[str, dict[str, Any]],
 ) -> int | None:
+    """从证据消息中推断年份。"""
     for message_id in evidence_ids:
         occurred_at_local = _optional_string(
             message_by_id.get(message_id, {}).get("occurred_at_local")
@@ -535,6 +556,7 @@ def _evidence_year(
 
 
 def _float_in_range(value: Any, *, default: float) -> float:
+    """校验数值是否在指定范围内。"""
     try:
         number = float(value)
     except (TypeError, ValueError):

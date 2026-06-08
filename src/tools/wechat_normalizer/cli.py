@@ -9,7 +9,7 @@ from .preferences import profile_from_memories
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """构建微信导出标准化工具的命令行参数解析器。"""
+    """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
         description="Normalize a JSON WeChat export for downstream LLM extraction."
     )

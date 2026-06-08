@@ -44,6 +44,7 @@ class ChatState(TypedDict):
 
 def retrieve_memory(state: ChatState) -> ChatState:
     # 输入 LangGraph 聊天状态；输出带 memory_context 的状态片段；作用是从安全 vault 检索相关记忆。
+    """从 vault 检索当前问题相关的长期记忆。"""
     query = state["user_input"]
     if is_wechat_activity_report_request(query):
         return {"memory_context": ""}
@@ -63,13 +64,18 @@ def retrieve_memory(state: ChatState) -> ChatState:
 
 def build_graph():
     # 输入无显式参数；输出编译后的 LangGraph 应用；作用是组装检索与聊天生成流程。
+    """构建当前模块使用的 LangGraph 对话图。"""
     model_name = os.getenv("TONGYI_MODEL", "qwen-turbo")
     llm = ChatTongyi(model=model_name)
 
     def chatbot(state: ChatState) -> ChatState:
         # 输入 LangGraph 聊天状态；输出新增助手消息的状态片段；作用是调用通义模型生成回复。
+        """调用聊天模型生成当前轮回复。"""
         messages = list(state["messages"])
-        tool_reply = try_handle_wechat_activity_report(state["user_input"])
+        tool_reply = try_handle_wechat_activity_report(
+            state["user_input"],
+            conversation_history=_message_history_for_tools(messages),
+        )
         if tool_reply is not None:
             return {"messages": [AIMessage(content=tool_reply)]}
 
@@ -98,9 +104,23 @@ def build_graph():
     graph.set_finish_point("chatbot")
     return graph.compile()
 
+
+def _message_history_for_tools(messages: list[BaseMessage]) -> list[dict[str, str]]:
+    """把 LangChain 消息历史转换为工具可读格式。"""
+    history: list[dict[str, str]] = []
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            history.append({"role": "user", "content": str(message.content)})
+        elif isinstance(message, AIMessage):
+            history.append({"role": "assistant", "content": str(message.content)})
+    if history and history[-1]["role"] == "user":
+        history = history[:-1]
+    return history
+
     # 异步提取并存储，不阻塞用户
 def async_store(conv):
     # 输入待抽取的用户消息列表；输出无返回值；作用是异步抽取并通过安全 vault 存储记忆。
+    """异步抽取并存储当前用户消息中的长期记忆。"""
     if VAULT_SESSION is None:
         return
 
@@ -114,6 +134,7 @@ def async_store(conv):
 
 def initialize_vault_session() -> None:
     # 输入环境变量中的用户配置；输出无返回值；作用是建立安全信道并初始化全局 vault session。
+    """初始化本机开发 CLI 使用的 vault 安全会话。"""
     global VAULT_SESSION
 
     user_id = os.getenv("VAULT_USER_ID", "default_user")
@@ -138,6 +159,7 @@ def initialize_vault_session() -> None:
 
 def main():
     # 输入终端用户交互；输出无返回值；作用是运行命令行多轮聊天主循环。
+    """执行命令行入口。"""
     if not os.getenv("DASHSCOPE_API_KEY"):
         raise EnvironmentError("Missing DASHSCOPE_API_KEY. Please export it before running.")
 

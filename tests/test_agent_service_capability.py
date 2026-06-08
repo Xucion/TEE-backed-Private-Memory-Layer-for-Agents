@@ -17,31 +17,37 @@ from untrusted.agent_runtime import AgentService, AgentServiceError
 class FakeRedis:
     def __init__(self) -> None:
         # 输入无显式参数；输出 fake Redis；作用是保存测试中的短期 history。
+        """初始化当前对象。"""
         self.values: dict[str, str] = {}
 
     def get(self, key: str) -> str | None:
         # 输入 Redis key；输出已保存字符串或 None；作用是模拟 history 读取。
+        """获取当前函数的核心逻辑。"""
         return self.values.get(key)
 
     def setex(self, key: str, ttl: int, value: str) -> None:
         # 输入 key、TTL 和 value；输出无返回值；作用是模拟带 TTL 的 history 写入。
+        """模拟 Redis setex 写入并记录 TTL。"""
         self.values[key] = value
 
 
 class FakeLlm:
     def invoke(self, messages):
         # 输入 LangChain messages；输出固定回复；作用是避免测试调用外部 LLM。
+        """调用当前函数的核心逻辑。"""
         return SimpleNamespace(content="测试回复")
 
 
 def _assert(condition: bool, message: str) -> None:
     # 输入断言条件和消息；输出无返回值；作用是提供脚本式测试失败信息。
+    """在测试中断言条件成立。"""
     if not condition:
         raise AssertionError(message)
 
 
 def test_agent_service_capability() -> None:
     # 输入无显式参数；输出无返回值；作用是验证 AgentService 只使用 capability 而不依赖用户 key。
+    """验证 agent_service_capability 的行为符合预期。"""
     service = AgentService("redis://unused", "unused")
     fake_redis = FakeRedis()
     service._redis = fake_redis
@@ -59,18 +65,20 @@ def test_agent_service_capability() -> None:
     try:
         def fake_retrieve(token: str, query: str, top_k: int, threshold: float) -> str:
             # 输入 capability 和检索参数；输出空上下文；作用是捕获 Agent 使用的 token。
+            """提供测试用的替身实现。"""
             retrieved_capabilities.append(token)
             return ""
 
         def fake_store(token: str, memories: list[dict]) -> int:
             # 输入 capability 和记忆；输出存储数量；作用是捕获后台存储使用的 token。
+            """提供测试用的替身实现。"""
             stored_capabilities.append(token)
             return len(memories)
 
         agent_runtime.retrieve_context_with_capability = fake_retrieve
         agent_runtime.store_memories_with_capability = fake_store
         agent_runtime.extract_memories = lambda messages: [{"content": "用户喜欢测试"}]
-        agent_runtime.try_handle_wechat_activity_report = lambda message: None
+        agent_runtime.try_handle_wechat_activity_report = lambda message, **kwargs: None
 
         result = service.generate_reply(capability, "conversation-1", "你好")
         _assert(result["reply"] == "测试回复", "unexpected LLM reply")
@@ -89,6 +97,7 @@ def test_agent_service_capability() -> None:
 
         def reject_retrieve(token: str, query: str, top_k: int, threshold: float) -> str:
             # 输入 capability 和检索参数；输出无；作用是模拟无效或过期 capability。
+            """模拟拒绝访问的测试路径。"""
             raise VaultApiError("capability 无效")
 
         agent_runtime.retrieve_context_with_capability = reject_retrieve
@@ -105,6 +114,7 @@ def test_agent_service_capability() -> None:
 
 
 def test_agent_service_wechat_report_tool_route() -> None:
+    """验证 agent_service_wechat_report_tool_route 的行为符合预期。"""
     service = AgentService("redis://unused", "unused")
     fake_redis = FakeRedis()
     service._redis = fake_redis
@@ -115,7 +125,8 @@ def test_agent_service_wechat_report_tool_route() -> None:
     try:
         calls: list[str] = []
 
-        def fake_tool(message: str) -> str | None:
+        def fake_tool(message: str, **kwargs) -> str | None:
+            """提供测试用的替身实现。"""
             calls.append(message)
             if "微信活动报告" in message:
                 return "微信活动报告已生成。\n- HTML：report.html"
@@ -138,6 +149,7 @@ def test_agent_service_wechat_report_tool_route() -> None:
 
 
 def test_agent_service_without_vault_capability_degrades_to_chat() -> None:
+    """验证 agent_service_without_vault_capability_degrades_to_chat 的行为符合预期。"""
     service = AgentService("redis://unused", "unused")
     fake_redis = FakeRedis()
     service._redis = fake_redis
@@ -150,11 +162,12 @@ def test_agent_service_without_vault_capability_degrades_to_chat() -> None:
         calls: list[str] = []
 
         def fake_retrieve(token: str, query: str, top_k: int, threshold: float) -> str:
+            """提供测试用的替身实现。"""
             calls.append(token)
             return "should not happen"
 
         agent_runtime.retrieve_context_with_capability = fake_retrieve
-        agent_runtime.try_handle_wechat_activity_report = lambda message: None
+        agent_runtime.try_handle_wechat_activity_report = lambda message, **kwargs: None
 
         result = service.generate_reply(None, "conversation-no-vault", "你好")
 
