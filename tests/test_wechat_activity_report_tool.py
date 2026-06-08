@@ -268,6 +268,39 @@ def test_wechat_report_tool_inherits_target_from_dialogue() -> None:
     assert captured["usernames"] == ["wxid_a6aq0g1v2g7f22"]
 
 
+def test_wechat_report_tool_does_not_reuse_completed_request_for_greeting() -> None:
+    """A completed report must not capture an unrelated follow-up message."""
+    history = [
+        {"role": "user", "content": "帮我生成和寻徐一周聊天内容的活动总结"},
+        {"role": "assistant", "content": "已为「寻徐」生成微信活动报告。"},
+    ]
+
+    reply = try_handle_wechat_activity_report(
+        "你好",
+        conversation_history=history,
+    )
+
+    assert reply is None
+
+
+def test_wechat_report_tool_does_not_reuse_failed_request_for_greeting() -> None:
+    """A failed report attempt is also a finished turn, not a pending slot."""
+    history = [
+        {"role": "user", "content": "帮我生成和寻徐一周聊天内容的活动总结"},
+        {
+            "role": "assistant",
+            "content": "解析微信会话失败：没有找到名称匹配「寻徐」的微信会话",
+        },
+    ]
+
+    reply = try_handle_wechat_activity_report(
+        "你好",
+        conversation_history=history,
+    )
+
+    assert reply is None
+
+
 def test_wechat_report_langgraph_exposes_expected_nodes() -> None:
     """验证 wechat_report_langgraph_exposes_expected_nodes 的行为符合预期。"""
     graph = build_wechat_activity_report_graph()
@@ -306,3 +339,26 @@ def test_wechat_report_tool_parses_explicit_username_request() -> None:
     assert captured["start_time"] == 1780761600
     assert captured["end_time"] == 1780847999
     assert captured["make_pdf"] is False
+
+
+def test_wechat_report_tool_reports_pdf_failure() -> None:
+    """The reply must not claim a PDF exists when rendering failed."""
+    def fake_runner(**kwargs):
+        return {
+            "input": "src/tools/wechatOutput/export",
+            "html_output": "src/tools/wechatOutput/export/weekly_activity_summary.html",
+            "pdf_output": None,
+            "pdf_created": False,
+            "pdf_error": "No Chrome/Edge/Chromium executable found for PDF export.",
+            "summary_output": "src/tools/wechatOutput/export/weekly_activity_summary.json",
+            "llm_called": False,
+        }
+
+    reply = try_handle_wechat_activity_report(
+        "为 username=wxid_test，生成 2026-06-07 的微信活动报告",
+        runner=fake_runner,
+    )
+
+    assert reply is not None
+    assert "PDF：生成失败" in reply
+    assert "PDF：src/tools" not in reply

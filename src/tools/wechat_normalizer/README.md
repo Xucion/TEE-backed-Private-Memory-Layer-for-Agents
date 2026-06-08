@@ -216,6 +216,7 @@ LLM 提取阶段：
 - 图片本体不会发送给模型。
 - 图片只作为同时间段附件元信息出现。
 - prompt 明确要求模型不能根据图片文件名、尺寸、hash 或存在性推测事实。
+- 最终关联还会校验图片与活动证据消息的时间，超过 30 秒的图片不会挂到该活动。
 
 渲染阶段：
 
@@ -306,6 +307,9 @@ python .\src\tools\summarize_wechat_activities.py `
 python .\src\tools\render_wechat_summary.py `
   --input .\src\tools\wechatOutput\wechat_chat_xunxu_2026-06-07_json\weekly_activity_summary.json
 ```
+
+PDF 导出需要本机存在 Chrome、Edge 或 Chromium。若浏览器不在常见路径，可通过
+`WECHAT_PDF_BROWSER` 指定可执行文件；导出失败时只返回 HTML，不会报告不存在的 PDF 路径。
 
 只生成 HTML，不导出 PDF：
 

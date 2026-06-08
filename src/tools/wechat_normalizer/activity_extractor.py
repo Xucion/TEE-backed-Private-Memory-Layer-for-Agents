@@ -4,6 +4,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -85,6 +86,7 @@ OPTIONAL_SIGNALS = (
     "报名中",
 )
 DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:T00:00:00(?:[+-]\d{2}:\d{2}|Z)?)?$")
+RELATED_IMAGE_MAX_DISTANCE_SECONDS = 30
 
 
 class ChatModel(Protocol):
@@ -287,13 +289,17 @@ def normalize_activity_response(
         if not evidence_ids:
             continue
 
-        related_image_ids = [
+        requested_image_ids = [
             item
             for item in _string_list(raw.get("related_image_message_ids"))
             if item in image_by_message_id
         ]
-        if not related_image_ids and image_by_message_id:
-            related_image_ids = sorted(image_by_message_id)
+        related_image_ids = _related_image_ids(
+            evidence_ids,
+            requested_image_ids,
+            message_by_id,
+            image_by_message_id,
+        )
 
         kind = _optional_string(raw.get("kind")) or "other"
         if kind not in VALID_KINDS:
@@ -365,6 +371,49 @@ def normalize_activity_response(
             }
         )
     return normalized
+
+
+def _related_image_ids(
+    evidence_ids: list[str],
+    requested_image_ids: list[str],
+    message_by_id: dict[str, dict[str, Any]],
+    image_by_message_id: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Keep only images close enough to the activity's evidence messages."""
+    evidence_times = [
+        timestamp
+        for message_id in evidence_ids
+        if (timestamp := _parse_local_timestamp(message_by_id[message_id].get("occurred_at_local")))
+    ]
+    if not evidence_times:
+        return []
+
+    candidates = requested_image_ids or sorted(image_by_message_id)
+    related: list[tuple[float, str]] = []
+    for message_id in candidates:
+        image_time = _parse_local_timestamp(
+            image_by_message_id[message_id].get("occurred_at_local")
+        )
+        if image_time is None:
+            continue
+        distance = min(
+            abs((image_time - evidence_time).total_seconds())
+            for evidence_time in evidence_times
+        )
+        if distance <= RELATED_IMAGE_MAX_DISTANCE_SECONDS:
+            related.append((distance, message_id))
+    return [message_id for _, message_id in sorted(related)]
+
+
+def _parse_local_timestamp(value: Any) -> datetime | None:
+    """Parse an ISO timestamp used by normalized messages."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _build_chat_model(model_name: str | None = None) -> ChatTongyi:

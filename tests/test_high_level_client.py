@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import urllib.error
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -11,7 +12,12 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 
-from client.agent_client import AgentClientError, ConfidentialAgentClient
+from client import agent_client
+from client.agent_client import (
+    DEFAULT_TIMEOUT_SECONDS,
+    AgentClientError,
+    ConfidentialAgentClient,
+)
 from client.vault_client import ProvisionedVaultAccess, VaultClientError
 
 
@@ -35,6 +41,12 @@ class FailingProvisioningClient:
     def provision(self, user_id: str, user_key: bytes) -> ProvisionedVaultAccess:
         """注入当前函数的核心逻辑。"""
         raise VaultClientError("vault unavailable")
+
+
+class UnexpectedProvisioningClient:
+    def provision(self, user_id: str, user_key: bytes) -> ProvisionedVaultAccess:
+        """Fail if explicit no-vault mode attempts provisioning."""
+        raise AssertionError("explicit no-vault mode attempted provisioning")
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -129,6 +141,57 @@ def test_high_level_client_no_vault_mode() -> None:
         print("high-level client no-vault OK")
 
 
+def test_high_level_client_explicit_no_vault_skips_provisioning() -> None:
+    """Explicit no-vault mode must not probe the provisioning endpoints."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        client = ConfidentialAgentClient(
+            user_id="alice",
+            api_base_url="http://unused",
+            session_id="conversation-explicit-no-vault",
+            key_file=Path(temp_dir) / "alice.key",
+            no_vault=True,
+        )
+        client._provisioning_client = UnexpectedProvisioningClient()
+        client._post_json = lambda path, payload, headers=None: {"reply": "普通聊天"}
+
+        reply = client.chat("你好")
+
+        _assert(reply == "普通聊天", "explicit no-vault chat failed")
+        _assert(client._access is None, "explicit no-vault mode created vault access")
+
+
+def test_high_level_client_reports_timeout_separately() -> None:
+    """HTTP read timeouts should not be reported as connection failures."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        client = ConfidentialAgentClient(
+            user_id="alice",
+            api_base_url="http://unused",
+            key_file=Path(temp_dir) / "alice.key",
+            allow_no_vault=True,
+        )
+        original_urlopen = agent_client.urllib.request.urlopen
+
+        def timed_out(*args, **kwargs):
+            raise urllib.error.URLError(TimeoutError("timed out"))
+
+        try:
+            agent_client.urllib.request.urlopen = timed_out
+            try:
+                client._post_json("/chat", {"session_id": "s", "message": "你好"})
+            except AgentClientError as exc:
+                _assert("请求超时" in str(exc), "timeout was reported as a connection failure")
+                _assert(
+                    f"{DEFAULT_TIMEOUT_SECONDS:g} 秒" in str(exc),
+                    "timeout message omitted the configured wait",
+                )
+            else:
+                raise AssertionError("timeout did not raise AgentClientError")
+        finally:
+            agent_client.urllib.request.urlopen = original_urlopen
+
+
 if __name__ == "__main__":
     test_high_level_client()
     test_high_level_client_no_vault_mode()
+    test_high_level_client_explicit_no_vault_skips_provisioning()
+    test_high_level_client_reports_timeout_separately()

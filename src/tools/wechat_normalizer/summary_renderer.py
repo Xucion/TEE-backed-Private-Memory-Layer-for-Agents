@@ -5,6 +5,7 @@ import base64
 import html
 import json
 import mimetypes
+import os
 import shutil
 import subprocess
 from datetime import datetime
@@ -42,7 +43,7 @@ def render_summary_files(
 
     return {
         "html": str(target_html),
-        "pdf": str(target_pdf) if make_pdf else None,
+        "pdf": str(target_pdf) if pdf_created else None,
         "pdf_created": pdf_created,
         "pdf_error": pdf_error,
     }
@@ -121,19 +122,24 @@ def render_pdf_with_browser(html_path: Path, pdf_path: Path) -> bool:
         f"--print-to-pdf={pdf_path}",
         str(html_path.resolve()),
     ]
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"PDF export command failed: {exc}") from exc
     if result.returncode != 0:
         raise RuntimeError(
             f"PDF export failed with exit code {result.returncode}: "
             f"{result.stderr or result.stdout}"
         )
-    return pdf_path.is_file() and pdf_path.stat().st_size > 0
+    if not pdf_path.is_file() or pdf_path.stat().st_size <= 0:
+        raise RuntimeError("PDF export command completed but no PDF file was created.")
+    return True
 
 
 def _render_item(item: dict[str, Any], export_root: Path, badge: str) -> str:
@@ -232,7 +238,24 @@ def _image_data_uri(export_root: Path, image: dict[str, Any]) -> str | None:
 
 def _find_browser() -> Path | None:
     """查找可用于渲染 PDF 的浏览器。"""
-    names = ("chrome", "chrome.exe", "msedge", "msedge.exe", "chromium", "chromium.exe")
+    configured = os.getenv("WECHAT_PDF_BROWSER", "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.is_file() and os.access(configured_path, os.X_OK):
+            return configured_path
+    names = (
+        "google-chrome",
+        "google-chrome-stable",
+        "chrome",
+        "chrome.exe",
+        "microsoft-edge",
+        "microsoft-edge-stable",
+        "msedge",
+        "msedge.exe",
+        "chromium",
+        "chromium-browser",
+        "chromium.exe",
+    )
     for name in names:
         found = shutil.which(name)
         if found:

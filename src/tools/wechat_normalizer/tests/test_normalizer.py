@@ -265,6 +265,87 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(activities[0]["evidence_message_ids"], [evidence_id])
         self.assertEqual(activities[0]["related_images"][0]["message_id"], image_id)
 
+    def test_activity_response_does_not_attach_distant_group_images(self) -> None:
+        """Images in a coarse context group must remain close to evidence."""
+        payload = {
+            "context_group_id": "group_test",
+            "messages": [
+                {
+                    "message_id": "text_1",
+                    "occurred_at_local": "2026-06-07T22:36:58+08:00",
+                    "text": "请提交医保报销材料。",
+                    "title": None,
+                    "url": None,
+                    "llm_text": "",
+                }
+            ],
+            "images": [
+                {
+                    "message_id": "image_1",
+                    "occurred_at_local": "2026-06-07T22:38:24+08:00",
+                    "relative_path": "media/images/image_1.jpg",
+                }
+            ],
+        }
+        activities = normalize_activity_response(
+            {
+                "activities": [
+                    {
+                        "title": "医保报销材料提交",
+                        "evidence_message_ids": ["text_1"],
+                        "evidence_quote": "请提交医保报销材料",
+                        "related_image_message_ids": ["image_1"],
+                    }
+                ]
+            },
+            payload,
+        )
+        self.assertEqual(activities[0]["related_images"], [])
+
+    def test_activity_response_infers_only_nearby_images(self) -> None:
+        """Missing image IDs may infer attachments only from a short window."""
+        payload = {
+            "context_group_id": "group_test",
+            "messages": [
+                {
+                    "message_id": "text_1",
+                    "occurred_at_local": "2026-06-07T22:38:24+08:00",
+                    "text": "点击二维码缴纳空调折旧费。",
+                    "title": None,
+                    "url": None,
+                    "llm_text": "",
+                }
+            ],
+            "images": [
+                {
+                    "message_id": "near_image",
+                    "occurred_at_local": "2026-06-07T22:38:25+08:00",
+                    "relative_path": "media/images/near.jpg",
+                },
+                {
+                    "message_id": "far_image",
+                    "occurred_at_local": "2026-06-07T22:40:50+08:00",
+                    "relative_path": "media/images/far.jpg",
+                },
+            ],
+        }
+        activities = normalize_activity_response(
+            {
+                "activities": [
+                    {
+                        "title": "空调折旧费缴纳",
+                        "evidence_message_ids": ["text_1"],
+                        "evidence_quote": "点击二维码缴纳空调折旧费",
+                    }
+                ]
+            },
+            payload,
+        )
+        self.assertEqual(
+            [image["message_id"] for image in activities[0]["related_images"]],
+            ["near_image"],
+        )
+
     def test_optional_signup_is_not_forced_mandatory(self) -> None:
         """验证 optional_signup_is_not_forced_mandatory 的行为符合预期。"""
         payload = {

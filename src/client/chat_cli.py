@@ -7,7 +7,11 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1]
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from client.agent_client import AgentClientError, ConfidentialAgentClient
+from client.agent_client import (
+    DEFAULT_TIMEOUT_SECONDS,
+    AgentClientError,
+    ConfidentialAgentClient,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -38,6 +42,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="开发模式：不初始化 vault，不使用长期记忆，只进行普通聊天和可用工具调用。",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help=f"Agent 请求超时秒数；默认 {DEFAULT_TIMEOUT_SECONDS:g} 秒",
+    )
     return parser
 
 
@@ -51,13 +61,15 @@ def main() -> None:
             api_base_url=args.url,
             session_id=args.session,
             key_file=args.key_file,
+            timeout_seconds=args.timeout,
             allow_no_vault=args.no_vault,
+            no_vault=args.no_vault,
         )
         client.provision()
     except AgentClientError as exc:
         raise SystemExit(f"客户端初始化失败: {exc}") from exc
 
-    print(f"已连接 Agent，user_id={client.user_id}")
+    print(f"Agent 客户端已启动，user_id={client.user_id}")
     print(f"session_id={client.session_id}")
     if client._no_vault_mode:
         print("Vault 未启用：当前为无长期记忆模式。")

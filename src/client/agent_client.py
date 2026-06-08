@@ -18,7 +18,7 @@ from client.vault_client import (
 
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
-DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_TIMEOUT_SECONDS = 900.0
 CAPABILITY_REFRESH_MARGIN_SECONDS = 30
 _USER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
@@ -37,6 +37,7 @@ class ConfidentialAgentClient:
         user_key: bytes | str | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         allow_no_vault: bool = False,
+        no_vault: bool = False,
     ) -> None:
         """初始化当前对象。"""
         self.user_id = self._validate_user_id(user_id)
@@ -44,7 +45,7 @@ class ConfidentialAgentClient:
         self.session_id = session_id or f"conversation-{secrets.token_hex(8)}"
         self.timeout_seconds = timeout_seconds
         self.allow_no_vault = bool(allow_no_vault)
-        self._no_vault_mode = False
+        self._no_vault_mode = bool(no_vault)
         self.key_file = Path(key_file).expanduser() if key_file else self.default_key_file(self.user_id)
 
         self.user_key = self._resolve_user_key(user_key)
@@ -146,7 +147,15 @@ class ConfidentialAgentClient:
             if detail:
                 message = f"{message}: {detail}"
             raise AgentClientError(message) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except TimeoutError as exc:
+            raise AgentClientError(
+                f"Agent 请求超时（等待 {self.timeout_seconds:g} 秒）"
+            ) from exc
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise AgentClientError(
+                    f"Agent 请求超时（等待 {self.timeout_seconds:g} 秒）"
+                ) from exc
             raise AgentClientError(f"无法连接 Agent 服务: {self.api_base_url}") from exc
         except json.JSONDecodeError as exc:
             raise AgentClientError("Agent 返回了无效 JSON") from exc

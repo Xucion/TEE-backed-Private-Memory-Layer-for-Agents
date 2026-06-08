@@ -266,7 +266,9 @@ def _parse_request_node(state: WeChatReportGraphState) -> dict[str, Any]:
             "reply": "要生成微信活动报告，还需要时间范围，例如：一周、本周、上周，或 2026-06-07。",
         }
 
-    target_name = _extract_target_name(text) or _extract_target_name(context_text)
+    target_name = None
+    if not username:
+        target_name = _extract_target_name(text) or _extract_target_name(context_text)
     if not username and not target_name:
         reply = "要生成微信活动报告，还需要群名或联系人名称，例如：卫星互联网研究所（25级）。"
         return {"error": reply, "reply": reply}
@@ -363,8 +365,12 @@ def _final_response_node(state: WeChatReportGraphState) -> dict[str, Any]:
         f"- HTML：{result.get('html_output', '')}",
     ]
     pdf_output = str(result.get("pdf_output") or "")
-    if pdf_output:
+    pdf_created = result.get("pdf_created")
+    if pdf_output and pdf_created is not False:
         lines.append(f"- PDF：{pdf_output}")
+    elif state.get("make_pdf"):
+        pdf_error = str(result.get("pdf_error") or "未生成 PDF 文件")
+        lines.append(f"- PDF：生成失败（{pdf_error}）")
     lines.extend(
         [
             f"- 周报 JSON：{result.get('summary_output', '')}",
@@ -458,14 +464,12 @@ def _looks_like_report_request(text: str) -> bool:
 
 
 def _has_pending_report_context(history: list[dict[str, str]]) -> bool:
-    """判断指定条件是否成立。"""
+    """Return whether the latest assistant reply is asking for a report slot."""
     for item in reversed(history[-6:]):
-        role = item.get("role")
+        if item.get("role") != "assistant":
+            continue
         content = str(item.get("content") or "")
-        if role == "assistant" and "要生成微信活动报告，还需要" in content:
-            return True
-        if role == "user" and _looks_like_report_request(content):
-            return True
+        return "要生成微信活动报告，还需要" in content
     return False
 
 
