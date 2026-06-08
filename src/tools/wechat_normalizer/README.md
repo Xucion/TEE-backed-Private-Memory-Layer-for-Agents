@@ -2,6 +2,77 @@
 
 这组工具把微信 JSON 导出目录转换成可发群的事项汇总报告。工具全部位于 `src/tools/`，不读取或修改 Agent/Vault 主流程。
 
+## 像 Agent 工具一样调用 WeChatDataAnalysis
+
+如果本地已经启动 `externalAPI/WeChatDataAnalysis` 后端，可以让报告流水线先调用它的 HTTP API 导出聊天记录，再继续生成活动报告。这个封装位于：
+
+```text
+src/tools/wechat_normalizer/wechat_export_api.py
+```
+
+它对 Agent 暴露的是业务参数：账号、会话 username、时间范围、导出名称和是否包含媒体；内部才处理 `POST /api/chat/exports`、轮询任务、下载 zip 和安全解压。工具名是 `export_wechat_chat`，可用 `WECHAT_EXPORT_TOOL_SCHEMA` 注册参数 schema，用 `call_wechat_export_tool(arguments)` 执行。
+
+示例：
+
+```powershell
+python .\src\tools\build_wechat_activity_report.py `
+  --wechat-api http://127.0.0.1:10392 `
+  --account wxid_3own0jvr3p9k12 `
+  --username wxid_a6aq0g1v2g7f22 `
+  --start-time 1780761600 `
+  --end-time 1780847999 `
+  --export-name wechat_chat_xunxu_2026-06-07_json `
+  --output-root .\src\tools\wechatOutput `
+  --backend-output-dir D:\srcVersionWechatAnalysis\WeChatDataAnalysis\exports
+```
+
+导出完成后会在 `--output-root` 下得到同名目录，然后自动继续执行 normalize、extract、summarize 和 render。调试页面或复用已有提取结果时仍可加：
+
+```powershell
+--skip-extract
+```
+
+只检查 LLM 请求载荷、不真正调用模型时仍可加：
+
+```powershell
+--dry-run-llm
+```
+
+## 通过主对话 Agent 调用
+
+主对话入口现在通过一个 LangGraph 子图识别真实用户风格的微信活动报告请求。子图节点为：
+
+```text
+route_intent -> parse_request -> resolve_contact -> build_report -> final_response
+```
+
+请求里至少需要包含：
+
+```text
+群名或联系人名称
+时间范围，例如一周、本周、上周、具体日期，或 start_time/end_time
+```
+
+示例：
+
+```text
+帮我生成卫星互联网研究所（25级）一周聊天内容的活动总结
+```
+
+如果用户没有直接提供 `username`，Agent 会先调用 WeChatDataAnalysis 的联系人接口按名称查找会话：
+
+```text
+GET /api/chat/contacts?keyword=<url编码后的群名或联系人名>&include_friends=true&include_groups=false&include_officials=false
+```
+
+如果这个查询没有命中，会再允许 `include_groups=true` 重试一次，因为活动总结通常来自群聊。找到会话后，Agent 会调用 WeChatDataAnalysis API 导出聊天记录，并继续生成 HTML/PDF 报告。默认 API 地址是 `http://127.0.0.1:10392`，可用环境变量覆盖：
+
+```text
+WECHAT_EXPORT_API_BASE
+WECHAT_REPORT_OUTPUT_ROOT
+WECHAT_EXPORT_BACKEND_OUTPUT_DIR
+```
+
 ## 一键生成
 
 在项目根目录运行：

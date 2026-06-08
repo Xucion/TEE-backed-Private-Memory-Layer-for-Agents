@@ -54,6 +54,7 @@ def test_agent_service_capability() -> None:
     original_retrieve = agent_runtime.retrieve_context_with_capability
     original_store = agent_runtime.store_memories_with_capability
     original_extract = agent_runtime.extract_memories
+    original_tool = agent_runtime.try_handle_wechat_activity_report
 
     try:
         def fake_retrieve(token: str, query: str, top_k: int, threshold: float) -> str:
@@ -69,6 +70,7 @@ def test_agent_service_capability() -> None:
         agent_runtime.retrieve_context_with_capability = fake_retrieve
         agent_runtime.store_memories_with_capability = fake_store
         agent_runtime.extract_memories = lambda messages: [{"content": "用户喜欢测试"}]
+        agent_runtime.try_handle_wechat_activity_report = lambda message: None
 
         result = service.generate_reply(capability, "conversation-1", "你好")
         _assert(result["reply"] == "测试回复", "unexpected LLM reply")
@@ -90,19 +92,51 @@ def test_agent_service_capability() -> None:
             raise VaultApiError("capability 无效")
 
         agent_runtime.retrieve_context_with_capability = reject_retrieve
-        try:
-            service.generate_reply(capability, "conversation-2", "你好")
-        except AgentServiceError:
-            pass
-        else:
-            raise AssertionError("invalid capability did not reject chat")
+        degraded = service.generate_reply(capability, "conversation-2", "你好")
+        _assert(degraded["reply"] == "测试回复", "vault failure did not degrade to LLM chat")
+        _assert(degraded["memory_context_used"] is False, "degraded chat should not use memory context")
 
         print("agent service capability OK")
     finally:
         agent_runtime.retrieve_context_with_capability = original_retrieve
         agent_runtime.store_memories_with_capability = original_store
         agent_runtime.extract_memories = original_extract
+        agent_runtime.try_handle_wechat_activity_report = original_tool
+
+
+def test_agent_service_wechat_report_tool_route() -> None:
+    service = AgentService("redis://unused", "unused")
+    fake_redis = FakeRedis()
+    service._redis = fake_redis
+    service._llm = FakeLlm()
+
+    original_tool = agent_runtime.try_handle_wechat_activity_report
+
+    try:
+        calls: list[str] = []
+
+        def fake_tool(message: str) -> str | None:
+            calls.append(message)
+            if "微信活动报告" in message:
+                return "微信活动报告已生成。\n- HTML：report.html"
+            return None
+
+        agent_runtime.try_handle_wechat_activity_report = fake_tool
+
+        result = service.generate_reply(
+            "c" * 43,
+            "conversation-tool",
+            "为 account=wxid_a，username=wxid_b，生成 2026-06-07 的微信活动报告",
+        )
+
+        _assert(result["reply"].startswith("微信活动报告已生成"), "tool reply was not returned")
+        _assert(result["memory_context_used"] is False, "tool route should not use memory context")
+        _assert(len(calls) == 1, "tool route was not checked")
+        _assert(bool(fake_redis.values), "tool route did not save conversation history")
+    finally:
+        agent_runtime.try_handle_wechat_activity_report = original_tool
 
 
 if __name__ == "__main__":
     test_agent_service_capability()
+    test_agent_service_wechat_report_tool_route()

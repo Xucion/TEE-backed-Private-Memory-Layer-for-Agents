@@ -5,6 +5,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
@@ -31,6 +32,13 @@ from tools.wechat_normalizer.normalizer import normalize_export, _sanitize_url
 from tools.wechat_normalizer.preferences import (
     profile_from_memories,
     score_for_profile,
+)
+from tools.wechat_normalizer.wechat_export_api import (
+    WeChatExportApiError,
+    WeChatExportResult,
+    WECHAT_EXPORT_TOOL_SCHEMA,
+    call_wechat_export_tool,
+    extract_zip_safely,
 )
 
 
@@ -495,6 +503,113 @@ class WeChatNormalizerTests(unittest.TestCase):
             self.assertEqual(result["extract_mode"], "skipped")
             self.assertTrue((temp_export / "weekly_activity_summary.json").is_file())
             self.assertTrue((temp_export / "weekly_activity_summary.html").is_file())
+
+    def test_api_export_result_can_feed_pipeline(self) -> None:
+        import tools.build_wechat_activity_report as report_builder
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_export = Path(temp_dir) / "api_export"
+            shutil.copytree(SAMPLE_EXPORT, temp_export)
+
+            extracted_path = temp_export / "extracted_activities.jsonl"
+            extracted_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "wechat-extracted-activity/v1",
+                        "context_group_id": self.result.messages[0].context_group_id,
+                        "title": "API 导出后复用提取结果",
+                        "kind": "mandatory_task",
+                        "mandatory": True,
+                        "deadline": None,
+                        "registration_url": None,
+                        "missing_information": [],
+                        "evidence_message_ids": [self.result.messages[0].message_id],
+                        "related_images": [],
+                        "confidence": 0.9,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            original = report_builder.export_wechat_chat
+
+            def fake_export(_request):
+                return WeChatExportResult(
+                    export_id="export123",
+                    status="done",
+                    zip_path=Path(temp_dir) / "api_export.zip",
+                    export_dir=temp_export,
+                    job={"exportId": "export123", "status": "done", "zipReady": True},
+                )
+
+            try:
+                report_builder.export_wechat_chat = fake_export
+                result = report_builder.build_report_from_wechat_api(
+                    api_base="http://127.0.0.1:10392",
+                    account="wxid_account",
+                    usernames=["wxid_contact"],
+                    start_time=1780761600,
+                    end_time=1780847999,
+                    export_name="wechat_chat_xunxu_2026-06-07_json",
+                    output_root=Path(temp_dir),
+                    skip_extract=True,
+                    make_pdf=False,
+                )
+            finally:
+                report_builder.export_wechat_chat = original
+
+            self.assertFalse(result["llm_called"])
+            self.assertEqual(result["wechat_export"]["export_id"], "export123")
+            self.assertEqual(result["input"], str(temp_export.resolve()))
+            self.assertTrue((temp_export / "weekly_activity_summary.html").is_file())
+
+    def test_api_export_zip_path_traversal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            zip_path = root / "bad.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("../evil.txt", "bad")
+
+            with self.assertRaises(WeChatExportApiError):
+                extract_zip_safely(zip_path, root / "out")
+
+    def test_wechat_export_tool_facade_returns_structured_result(self) -> None:
+        import tools.wechat_normalizer.wechat_export_api as export_api
+
+        original = export_api.export_wechat_chat
+
+        def fake_export(request):
+            self.assertEqual(request.api_base, "http://127.0.0.1:10392")
+            self.assertEqual(request.usernames, ["wxid_a6aq0g1v2g7f22"])
+            return WeChatExportResult(
+                export_id="export456",
+                status="done",
+                zip_path=Path("out.zip"),
+                export_dir=Path("out"),
+                job={"exportId": "export456", "status": "done"},
+            )
+
+        try:
+            export_api.export_wechat_chat = fake_export
+            result = call_wechat_export_tool(
+                {
+                    "api_base": "http://127.0.0.1:10392",
+                    "account": "wxid_3own0jvr3p9k12",
+                    "usernames": ["wxid_a6aq0g1v2g7f22"],
+                    "start_time": 1780761600,
+                    "end_time": 1780847999,
+                    "export_name": "wechat_chat_xunxu_2026-06-07_json",
+                    "output_root": "src/tools/wechatOutput",
+                }
+            )
+        finally:
+            export_api.export_wechat_chat = original
+
+        self.assertEqual(WECHAT_EXPORT_TOOL_SCHEMA["name"], "export_wechat_chat")
+        self.assertEqual(result["export_id"], "export456")
+        self.assertEqual(result["status"], "done")
 
 
 if __name__ == "__main__":

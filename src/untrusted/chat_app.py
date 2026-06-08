@@ -21,6 +21,10 @@ from interface.vault_api import (
     secure_store_user_memories,
 )
 from untrusted.memory_extractor import extract_memories
+from untrusted.wechat_activity_report_tool import (
+    is_wechat_activity_report_request,
+    try_handle_wechat_activity_report,
+)
 
 
 SYSTEM_PROMPT = "你是一位乐于助人的助手。回答请保持清晰简洁。"
@@ -41,6 +45,8 @@ class ChatState(TypedDict):
 def retrieve_memory(state: ChatState) -> ChatState:
     # 输入 LangGraph 聊天状态；输出带 memory_context 的状态片段；作用是从安全 vault 检索相关记忆。
     query = state["user_input"]
+    if is_wechat_activity_report_request(query):
+        return {"memory_context": ""}
     if VAULT_SESSION is None:
         return {"memory_context": ""}
 
@@ -63,6 +69,9 @@ def build_graph():
     def chatbot(state: ChatState) -> ChatState:
         # 输入 LangGraph 聊天状态；输出新增助手消息的状态片段；作用是调用通义模型生成回复。
         messages = list(state["messages"])
+        tool_reply = try_handle_wechat_activity_report(state["user_input"])
+        if tool_reply is not None:
+            return {"messages": [AIMessage(content=tool_reply)]}
 
         if state.get("memory_context"):
             messages.insert(

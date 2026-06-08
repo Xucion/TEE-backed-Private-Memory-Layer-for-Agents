@@ -15,6 +15,11 @@ from tools.wechat_normalizer.activity_summary import write_activity_summary
 from tools.wechat_normalizer.normalizer import normalize_export, write_result
 from tools.wechat_normalizer.preferences import profile_from_memories
 from tools.wechat_normalizer.summary_renderer import render_summary_files
+from tools.wechat_normalizer.wechat_export_api import (
+    DEFAULT_MEDIA_KINDS,
+    WeChatExportRequest,
+    export_wechat_chat,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,9 +28,74 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--input",
-        required=True,
         type=Path,
         help="WeChat export directory containing manifest.json and conversations/.",
+    )
+    parser.add_argument(
+        "--wechat-api",
+        default=None,
+        help="WeChatDataAnalysis API base URL, for example http://127.0.0.1:10392.",
+    )
+    parser.add_argument(
+        "--account",
+        default=None,
+        help="WeChatDataAnalysis account directory name used for API export.",
+    )
+    parser.add_argument(
+        "--username",
+        action="append",
+        default=[],
+        help="Conversation username to export. Repeat for multiple conversations.",
+    )
+    parser.add_argument(
+        "--start-time",
+        type=int,
+        default=None,
+        help="Export start time as Unix seconds.",
+    )
+    parser.add_argument(
+        "--end-time",
+        type=int,
+        default=None,
+        help="Export end time as Unix seconds.",
+    )
+    parser.add_argument(
+        "--export-name",
+        default=None,
+        help="Export file/directory name; .zip suffix is optional.",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("src/tools/wechatOutput"),
+        help="Local directory for downloaded and extracted API exports.",
+    )
+    parser.add_argument(
+        "--backend-output-dir",
+        default=None,
+        help="Optional absolute output_dir sent to WeChatDataAnalysis backend.",
+    )
+    parser.add_argument(
+        "--no-media",
+        action="store_true",
+        help="Do not ask WeChatDataAnalysis to package media files.",
+    )
+    parser.add_argument(
+        "--privacy-mode",
+        action="store_true",
+        help="Enable WeChatDataAnalysis privacy_mode during API export.",
+    )
+    parser.add_argument(
+        "--export-timeout",
+        type=int,
+        default=600,
+        help="Seconds to wait for the WeChatDataAnalysis export job.",
+    )
+    parser.add_argument(
+        "--export-poll-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between WeChatDataAnalysis export status polls.",
     )
     parser.add_argument(
         "--model",
@@ -175,6 +245,61 @@ def build_report(
     return result
 
 
+def build_report_from_wechat_api(
+    *,
+    api_base: str,
+    account: str | None,
+    usernames: list[str],
+    start_time: int | None,
+    end_time: int | None,
+    export_name: str | None,
+    output_root: Path,
+    backend_output_dir: str | None = None,
+    include_media: bool = True,
+    privacy_mode: bool = False,
+    timeout_seconds: int = 600,
+    poll_interval_seconds: float = 1.0,
+    model_name: str | None = None,
+    minimum_score: float = 0.3,
+    include_all: bool = False,
+    skip_extract: bool = False,
+    dry_run_llm: bool = False,
+    make_pdf: bool = True,
+    timezone_offset: str = "+08:00",
+    user_memories: list[str] | None = None,
+) -> dict[str, Any]:
+    export_result = export_wechat_chat(
+        WeChatExportRequest(
+            api_base=api_base,
+            account=account,
+            usernames=usernames,
+            start_time=start_time,
+            end_time=end_time,
+            export_name=export_name,
+            output_root=output_root,
+            backend_output_dir=backend_output_dir,
+            include_media=include_media,
+            media_kinds=DEFAULT_MEDIA_KINDS,
+            privacy_mode=privacy_mode,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+    )
+    report = build_report(
+        export_result.export_dir,
+        model_name=model_name,
+        minimum_score=minimum_score,
+        include_all=include_all,
+        skip_extract=skip_extract,
+        dry_run_llm=dry_run_llm,
+        make_pdf=make_pdf,
+        timezone_offset=timezone_offset,
+        user_memories=user_memories,
+    )
+    report["wechat_export"] = export_result.to_dict()
+    return report
+
+
 def _count_jsonl_records(path: Path) -> int:
     with path.open("r", encoding="utf-8-sig") as handle:
         return sum(1 for line in handle if line.strip())
@@ -182,17 +307,43 @@ def _count_jsonl_records(path: Path) -> int:
 
 def main() -> None:
     args = build_parser().parse_args()
-    result = build_report(
-        args.input,
-        model_name=args.model,
-        minimum_score=args.minimum_score,
-        include_all=args.include_all,
-        skip_extract=args.skip_extract,
-        dry_run_llm=args.dry_run_llm,
-        make_pdf=not args.no_pdf,
-        timezone_offset=args.timezone_offset,
-        user_memories=args.user_memory,
-    )
+    if args.wechat_api:
+        result = build_report_from_wechat_api(
+            api_base=args.wechat_api,
+            account=args.account,
+            usernames=args.username,
+            start_time=args.start_time,
+            end_time=args.end_time,
+            export_name=args.export_name,
+            output_root=args.output_root,
+            backend_output_dir=args.backend_output_dir,
+            include_media=not args.no_media,
+            privacy_mode=args.privacy_mode,
+            timeout_seconds=args.export_timeout,
+            poll_interval_seconds=args.export_poll_interval,
+            model_name=args.model,
+            minimum_score=args.minimum_score,
+            include_all=args.include_all,
+            skip_extract=args.skip_extract,
+            dry_run_llm=args.dry_run_llm,
+            make_pdf=not args.no_pdf,
+            timezone_offset=args.timezone_offset,
+            user_memories=args.user_memory,
+        )
+    else:
+        if args.input is None:
+            raise SystemExit("Either --input or --wechat-api is required.")
+        result = build_report(
+            args.input,
+            model_name=args.model,
+            minimum_score=args.minimum_score,
+            include_all=args.include_all,
+            skip_extract=args.skip_extract,
+            dry_run_llm=args.dry_run_llm,
+            make_pdf=not args.no_pdf,
+            timezone_offset=args.timezone_offset,
+            user_memories=args.user_memory,
+        )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

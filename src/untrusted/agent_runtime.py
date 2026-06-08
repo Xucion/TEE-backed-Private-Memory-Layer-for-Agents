@@ -12,6 +12,7 @@ from interface.vault_api import (
     store_memories_with_capability,
 )
 from untrusted.memory_extractor import extract_memories
+from untrusted.wechat_activity_report_tool import try_handle_wechat_activity_report
 
 
 SYSTEM_PROMPT = "你是一位乐于助人的助手。回答请保持清晰简洁。"
@@ -173,6 +174,21 @@ class AgentService:
         if not user_message:
             raise AgentServiceError("message cannot be empty")
 
+        tool_reply = try_handle_wechat_activity_report(user_message)
+        if tool_reply is not None:
+            history = self._load_history(capability, session_id)
+            history.extend(
+                [
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": tool_reply},
+                ]
+            )
+            self._save_history(capability, session_id, history)
+            return {
+                "reply": tool_reply,
+                "memory_context_used": False,
+            }
+
         memory_context = ""
         try:
             memory_context = retrieve_context_with_capability(
@@ -181,9 +197,9 @@ class AgentService:
                 top_k=3,
                 threshold=0.4,
             )
-        except VaultApiError as exc:
-            logger.exception("Vault capability retrieval failed")
-            raise AgentServiceError("vault capability invalid, expired, or unavailable") from exc
+        except VaultApiError:
+            logger.exception("Vault capability retrieval failed; continuing without memory context")
+            memory_context = ""
 
         history = self._load_history(capability, session_id)
         messages = self._build_messages(
