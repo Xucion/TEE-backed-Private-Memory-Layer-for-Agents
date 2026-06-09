@@ -379,7 +379,7 @@ def _related_image_ids(
     message_by_id: dict[str, dict[str, Any]],
     image_by_message_id: dict[str, dict[str, Any]],
 ) -> list[str]:
-    """Keep only images close enough to the activity's evidence messages."""
+    """只保留与活动证据消息时间足够接近的图片。"""
     evidence_times = [
         timestamp
         for message_id in evidence_ids
@@ -406,7 +406,7 @@ def _related_image_ids(
 
 
 def _parse_local_timestamp(value: Any) -> datetime | None:
-    """Parse an ISO timestamp used by normalized messages."""
+    """解析规范化消息使用的 ISO 本地时间戳。"""
     text = str(value or "").strip()
     if not text:
         return None

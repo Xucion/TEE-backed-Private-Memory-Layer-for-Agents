@@ -266,7 +266,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(activities[0]["related_images"][0]["message_id"], image_id)
 
     def test_activity_response_does_not_attach_distant_group_images(self) -> None:
-        """Images in a coarse context group must remain close to evidence."""
+        """粗粒度上下文组中的图片仍必须接近证据消息。"""
         payload = {
             "context_group_id": "group_test",
             "messages": [
@@ -303,7 +303,7 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(activities[0]["related_images"], [])
 
     def test_activity_response_infers_only_nearby_images(self) -> None:
-        """Missing image IDs may infer attachments only from a short window."""
+        """缺少图片 ID 时只能从短时间窗口内推断附件。"""
         payload = {
             "context_group_id": "group_test",
             "messages": [

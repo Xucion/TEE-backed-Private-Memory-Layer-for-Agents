@@ -623,7 +623,7 @@ def _activity_features(
     message_type: str,
     has_media: bool,
 ) -> dict[str, Any]:
-    """Compute activity-candidate signals from Chinese WeChat text."""
+    """从中文微信文本中计算活动候选信号。"""
     normalized = text.lower()
     tags = sorted(
         tag
@@ -667,7 +667,7 @@ def _build_llm_text(
     url_host: str | None,
     media: list,
 ) -> str:
-    """Build compact, readable text for per-message LLM extraction."""
+    """为单条消息的 LLM 抽取构建紧凑可读文本。"""
     lines = [
         f"消息类型: {message_type}",
         f"原始时间: {occurred_at_local or 'unknown'}",

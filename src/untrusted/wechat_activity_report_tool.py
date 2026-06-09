@@ -86,7 +86,7 @@ def try_handle_wechat_activity_report(
     runner: Callable[..., dict[str, Any]] = build_report_from_wechat_api,
     contact_resolver: Callable[[str, str, str | None], ContactResolution] | None = None,
 ) -> str | None:
-    """Run the WeChat report LangGraph subflow and return a reply when handled."""
+    """运行微信报告 LangGraph 子流程，并在命中时返回回复。"""
 
     graph = build_wechat_activity_report_graph()
     state = graph.invoke(
@@ -103,7 +103,7 @@ def try_handle_wechat_activity_report(
 
 
 def build_wechat_activity_report_graph():
-    """Build the LangGraph subgraph for conversational WeChat report requests."""
+    """构建对话式微信报告请求使用的 LangGraph 子图。"""
 
     global _REPORT_GRAPH
     if _REPORT_GRAPH is not None:
@@ -159,11 +159,10 @@ class _FallbackGraphView:
 
 
 class _FallbackWeChatReportGraph:
-    """Small fallback for environments that have not installed LangGraph yet.
+    """为尚未安装 LangGraph 的环境提供小型回退实现。
 
-    requirements.txt declares LangGraph. This class keeps imports and tests
-    usable in minimal local interpreters; deployed environments with LangGraph
-    installed use the real StateGraph above.
+    requirements.txt 已声明 LangGraph。该类用于让最小本地解释器仍可导入和测试；
+    已安装 LangGraph 的部署环境会使用上方真实的 StateGraph。
     """
 
     _nodes = ["route_intent", "parse_request", "resolve_contact", "build_report", "final_response"]
@@ -194,7 +193,7 @@ def is_wechat_activity_report_request(user_message: str) -> bool:
 
 
 def resolve_contact_username(api_base: str, keyword: str, account: str | None = None) -> ContactResolution:
-    """Resolve a display name to a conversation username through WeChatDataAnalysis."""
+    """通过 WeChatDataAnalysis 将展示名称解析为会话 username。"""
 
     keyword = str(keyword or "").strip()
     if not keyword:
@@ -464,7 +463,7 @@ def _looks_like_report_request(text: str) -> bool:
 
 
 def _has_pending_report_context(history: list[dict[str, str]]) -> bool:
-    """Return whether the latest assistant reply is asking for a report slot."""
+    """判断最近的助手回复是否正在询问报告缺失槽位。"""
     for item in reversed(history[-6:]):
         if item.get("role") != "assistant":
             continue

@@ -45,7 +45,7 @@ class FailingProvisioningClient:
 
 class UnexpectedProvisioningClient:
     def provision(self, user_id: str, user_key: bytes) -> ProvisionedVaultAccess:
-        """Fail if explicit no-vault mode attempts provisioning."""
+        """显式无 vault 模式尝试 provisioning 时使测试失败。"""
         raise AssertionError("explicit no-vault mode attempted provisioning")
 
 
@@ -142,7 +142,7 @@ def test_high_level_client_no_vault_mode() -> None:
 
 
 def test_high_level_client_explicit_no_vault_skips_provisioning() -> None:
-    """Explicit no-vault mode must not probe the provisioning endpoints."""
+    """显式无 vault 模式不应探测 provisioning 端点。"""
     with tempfile.TemporaryDirectory() as temp_dir:
         client = ConfidentialAgentClient(
             user_id="alice",
@@ -161,7 +161,7 @@ def test_high_level_client_explicit_no_vault_skips_provisioning() -> None:
 
 
 def test_high_level_client_reports_timeout_separately() -> None:
-    """HTTP read timeouts should not be reported as connection failures."""
+    """HTTP 读取超时不应被报告为连接失败。"""
     with tempfile.TemporaryDirectory() as temp_dir:
         client = ConfidentialAgentClient(
             user_id="alice",
@@ -172,6 +172,7 @@ def test_high_level_client_reports_timeout_separately() -> None:
         original_urlopen = agent_client.urllib.request.urlopen
 
         def timed_out(*args, **kwargs):
+            """模拟 urllib 读取超时。"""
             raise urllib.error.URLError(TimeoutError("timed out"))
 
         try:

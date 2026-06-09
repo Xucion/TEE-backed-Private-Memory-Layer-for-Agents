@@ -60,7 +60,7 @@ def profile_from_memories(memories: list[str]) -> PreferenceProfile:
     )
 
 
-# Override mojibake literals above so Chinese preference memories can be matched.
+# 覆盖上方乱码字面量，确保可以匹配中文偏好记忆。
 TAG_KEYWORDS = {
     "competition": ("比赛", "竞赛", "大赛", "挑战杯", "赛题"),
     "entertainment": ("娱乐", "文艺", "音乐", "电影", "演出", "联谊", "聚会", "游戏"),
@@ -72,7 +72,7 @@ TAG_KEYWORDS = {
 
 
 def profile_from_memories(memories: list[str]) -> PreferenceProfile:
-    """Build an interest profile from minimized natural-language memories."""
+    """根据最小化后的自然语言记忆构建兴趣画像。"""
     interested: set[str] = set()
     ignored: set[str] = set()
     mandatory_only = False

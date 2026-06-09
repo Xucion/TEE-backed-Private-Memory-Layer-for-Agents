@@ -269,7 +269,7 @@ def test_wechat_report_tool_inherits_target_from_dialogue() -> None:
 
 
 def test_wechat_report_tool_does_not_reuse_completed_request_for_greeting() -> None:
-    """A completed report must not capture an unrelated follow-up message."""
+    """已完成的报告请求不应捕获无关的后续问候。"""
     history = [
         {"role": "user", "content": "帮我生成和寻徐一周聊天内容的活动总结"},
         {"role": "assistant", "content": "已为「寻徐」生成微信活动报告。"},
@@ -284,7 +284,7 @@ def test_wechat_report_tool_does_not_reuse_completed_request_for_greeting() -> N
 
 
 def test_wechat_report_tool_does_not_reuse_failed_request_for_greeting() -> None:
-    """A failed report attempt is also a finished turn, not a pending slot."""
+    """失败的报告尝试也属于已结束轮次，不应留下待补槽位。"""
     history = [
         {"role": "user", "content": "帮我生成和寻徐一周聊天内容的活动总结"},
         {
@@ -342,8 +342,9 @@ def test_wechat_report_tool_parses_explicit_username_request() -> None:
 
 
 def test_wechat_report_tool_reports_pdf_failure() -> None:
-    """The reply must not claim a PDF exists when rendering failed."""
+    """PDF 渲染失败时回复不应声称已生成 PDF。"""
     def fake_runner(**kwargs):
+        """提供返回 PDF 失败结果的测试替身。"""
         return {
             "input": "src/tools/wechatOutput/export",
             "html_output": "src/tools/wechatOutput/export/weekly_activity_summary.html",

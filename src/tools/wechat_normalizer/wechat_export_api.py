@@ -288,10 +288,10 @@ def export_wechat_chat(request: WeChatExportRequest) -> WeChatExportResult:
 
 
 def call_wechat_export_tool(arguments: dict[str, Any]) -> dict[str, Any]:
-    """Tool-calling facade for enterprise agent runtimes.
+    """为企业 Agent 运行时提供工具调用门面。
 
-    The agent supplies business arguments matching WECHAT_EXPORT_TOOL_SCHEMA.
-    This function hides HTTP job creation, polling, zip download, and extraction.
+    Agent 传入符合 WECHAT_EXPORT_TOOL_SCHEMA 的业务参数。
+    本函数封装 HTTP 任务创建、轮询、zip 下载和解压流程。
     """
 
     if not isinstance(arguments, dict):

@@ -1,6 +1,6 @@
 # Confidential Agent Memory Vault
 
-## 微信活动报告流水线
+## 微信活动报告助手
 
 `src/tools/` 中包含一套独立的微信活动报告工具链，可以把微信 JSON 导出目录转换为适合分享的活动/待办报告。该工具链独立于 Agent/Vault 运行时，不读取也不修改 vault 记忆文件。
 
