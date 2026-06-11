@@ -19,6 +19,7 @@ from tools.wechat_normalizer.llm_contract import (
 from tools.wechat_normalizer.activity_extractor import (
     build_group_payload,
     extract_activities_from_jsonl,
+    iter_group_payloads,
     normalize_activity_response,
 )
 from tools.wechat_normalizer.activity_summary import (
@@ -28,7 +29,11 @@ from tools.wechat_normalizer.activity_summary import (
 from tools.wechat_normalizer.summary_renderer import render_summary_html
 from tools.build_wechat_activity_report import build_report
 from tools.wechat_normalizer.media import inspect_media
-from tools.wechat_normalizer.normalizer import normalize_export, _sanitize_url
+from tools.wechat_normalizer.normalizer import (
+    _activity_features,
+    _sanitize_url,
+    normalize_export,
+)
 from tools.wechat_normalizer.preferences import (
     profile_from_memories,
     score_for_profile,
@@ -152,6 +157,19 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertFalse(optional_competition["recommended"])
         self.assertTrue(required_task["recommended"])
 
+    def test_candidate_scoring_prefers_generic_structure_over_category_words(self) -> None:
+        """领域类别词只提供弱信号，通用动作和指令结构决定候选性。"""
+        category_only = _activity_features("篮球", "text", False)
+        structured = _activity_features(
+            "请各位在明天前填写相关信息。",
+            "text",
+            False,
+        )
+        self.assertLess(category_only["candidate_score"], 0.3)
+        self.assertGreaterEqual(structured["candidate_score"], 0.3)
+        self.assertTrue(structured["action_signal"])
+        self.assertTrue(structured["mandatory_signal"])
+
     def test_llm_payload_contains_only_required_message_fields(self) -> None:
         """验证逐条 LLM 请求包含提取所需的最小消息字段。"""
         payload = build_extraction_payload(self.result.messages[0].to_dict())
@@ -264,6 +282,122 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(len(activities), 1)
         self.assertEqual(activities[0]["evidence_message_ids"], [evidence_id])
         self.assertEqual(activities[0]["related_images"][0]["message_id"], image_id)
+        self.assertGreaterEqual(
+            activities[0]["related_images"][0]["association_confidence"],
+            0.55,
+        )
+        self.assertTrue(
+            activities[0]["related_images"][0]["association_reason"]
+        )
+        self.assertIn(
+            activities[0]["related_images"][0]["association_role"],
+            {
+                "registration_qr",
+                "form_or_document",
+                "poster",
+                "supporting_image",
+                "unresolved",
+            },
+        )
+
+    def test_candidate_windows_are_bounded_during_continuous_chat(self) -> None:
+        """连续聊天中的候选窗口不能因重叠而无限扩大。"""
+        records = []
+        for index in range(30):
+            records.append(
+                {
+                    "message_id": f"msg_{index}",
+                    "conversation_id": "conv_1",
+                    "context_group_id": "group_1",
+                    "occurred_at": f"2026-06-07T10:{index:02d}:00+08:00",
+                    "occurred_at_local": f"2026-06-07T10:{index:02d}:00+08:00",
+                    "source_index": index,
+                    "message_type": "text",
+                    "text": f"连续聊天消息 {index}",
+                    "activity_features": {
+                        "candidate_score": 0.8 if index % 4 == 0 else 0.0,
+                    },
+                    "media": [],
+                }
+            )
+        payloads = list(iter_group_payloads(records))
+        self.assertGreater(len(payloads), 1)
+        self.assertTrue(
+            all(len(payload["messages"]) <= 13 for payload in payloads)
+        )
+
+    def test_candidate_window_keeps_distant_nearby_context(self) -> None:
+        """候选事项可以召回超出旧五分钟分组但仍在有界窗口内的补充。"""
+        records = [
+            {
+                "message_id": "location",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_1",
+                "occurred_at": "2026-06-07T10:00:00+08:00",
+                "occurred_at_local": "2026-06-07T10:00:00+08:00",
+                "source_index": 1,
+                "message_type": "text",
+                "text": "大家交到这里。",
+                "activity_features": {"candidate_score": 0.0},
+                "media": [],
+            },
+            {
+                "message_id": "deadline",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_2",
+                "occurred_at": "2026-06-07T10:17:00+08:00",
+                "occurred_at_local": "2026-06-07T10:17:00+08:00",
+                "source_index": 2,
+                "message_type": "text",
+                "text": "请在今天下午三点前提交。",
+                "activity_features": {"candidate_score": 0.8},
+                "media": [],
+            },
+        ]
+        payload = list(iter_group_payloads(records))[0]
+        self.assertEqual(
+            [message["message_id"] for message in payload["messages"]],
+            ["location", "deadline"],
+        )
+        self.assertEqual(
+            payload["source_context_group_ids"],
+            ["group_1", "group_2"],
+        )
+
+    def test_adjacent_ranges_do_not_merge_across_large_time_gap(self) -> None:
+        """索引相邻但时间相隔很远的候选消息必须属于不同窗口。"""
+        records = [
+            {
+                "message_id": "day_1",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_1",
+                "occurred_at": "2026-06-07T10:00:00+08:00",
+                "occurred_at_local": "2026-06-07T10:00:00+08:00",
+                "source_index": 1,
+                "message_type": "text",
+                "text": "请填写信息。",
+                "activity_features": {"candidate_score": 0.8},
+                "media": [],
+            },
+            {
+                "message_id": "day_2",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_2",
+                "occurred_at": "2026-06-08T10:00:00+08:00",
+                "occurred_at_local": "2026-06-08T10:00:00+08:00",
+                "source_index": 2,
+                "message_type": "text",
+                "text": "请提交材料。",
+                "activity_features": {"candidate_score": 0.8},
+                "media": [],
+            },
+        ]
+        payloads = list(iter_group_payloads(records))
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual(
+            [[message["message_id"] for message in payload["messages"]] for payload in payloads],
+            [["day_1"], ["day_2"]],
+        )
 
     def test_activity_response_does_not_attach_distant_group_images(self) -> None:
         """粗粒度上下文组中的图片仍必须接近证据消息。"""
@@ -346,6 +480,53 @@ class WeChatNormalizerTests(unittest.TestCase):
             ["near_image"],
         )
 
+    def test_image_reference_can_extend_association_window(self) -> None:
+        """明确媒体引用可在消息距离很近时扩展到数分钟，而非固定三十秒。"""
+        payload = {
+            "context_group_id": "group_test",
+            "messages": [
+                {
+                    "message_id": "text_1",
+                    "context_order": 1,
+                    "sender_id": "sender_1",
+                    "occurred_at_local": "2026-06-07T10:08:00+08:00",
+                    "text": "具体操作见上面的附件。",
+                    "title": None,
+                    "url": None,
+                    "llm_text": "",
+                }
+            ],
+            "images": [
+                {
+                    "message_id": "image_1",
+                    "context_order": 0,
+                    "sender_id": "sender_1",
+                    "occurred_at_local": "2026-06-07T10:00:00+08:00",
+                    "relative_path": "media/images/image_1.jpg",
+                }
+            ],
+        }
+        activities = normalize_activity_response(
+            {
+                "activities": [
+                    {
+                        "title": "操作通知",
+                        "evidence_message_ids": ["text_1"],
+                        "evidence_quote": "具体操作见上面的附件",
+                    }
+                ]
+            },
+            payload,
+        )
+        self.assertEqual(
+            [image["message_id"] for image in activities[0]["related_images"]],
+            ["image_1"],
+        )
+        self.assertEqual(
+            activities[0]["related_images"][0]["association_role"],
+            "form_or_document",
+        )
+
     def test_optional_signup_is_not_forced_mandatory(self) -> None:
         """验证 optional_signup_is_not_forced_mandatory 的行为符合预期。"""
         payload = {
@@ -388,6 +569,107 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(
             activities[0]["evidence_quote"],
             "欢迎全体师生积极报名飞盘比赛",
+        )
+
+    def test_optional_self_service_action_is_not_mandatory(self) -> None:
+        """“想要参加并自行填写”属于可选表达，不因填写动作变成强制任务。"""
+        payload = {
+            "context_group_id": "group_test",
+            "messages": [
+                {
+                    "message_id": "msg_1",
+                    "text": "想要参加的同学自行填写在线表格。",
+                    "title": None,
+                    "url": None,
+                    "llm_text": "",
+                }
+            ],
+            "images": [],
+        }
+        activities = normalize_activity_response(
+            {
+                "activities": [
+                    {
+                        "title": "在线活动登记",
+                        "kind": "mandatory_task",
+                        "mandatory": True,
+                        "evidence_message_ids": ["msg_1"],
+                        "evidence_quote": "想要参加的同学自行填写在线表格",
+                    }
+                ]
+            },
+            payload,
+        )
+        self.assertFalse(activities[0]["mandatory"])
+        self.assertEqual(activities[0]["kind"], "activity")
+
+    def test_explicit_obligation_remains_mandatory(self) -> None:
+        """通用义务表达应覆盖提交、填写等动作，而不依赖领域词。"""
+        payload = {
+            "context_group_id": "group_test",
+            "messages": [
+                {
+                    "message_id": "msg_1",
+                    "text": "相关人员需要在本周内提交纸质材料。",
+                    "title": None,
+                    "url": None,
+                    "llm_text": "",
+                }
+            ],
+            "images": [],
+        }
+        activities = normalize_activity_response(
+            {
+                "activities": [
+                    {
+                        "title": "纸质材料提交",
+                        "kind": "mandatory_task",
+                        "mandatory": True,
+                        "evidence_message_ids": ["msg_1"],
+                        "evidence_quote": "相关人员需要在本周内提交纸质材料",
+                    }
+                ]
+            },
+            payload,
+        )
+        self.assertTrue(activities[0]["mandatory"])
+        self.assertEqual(activities[0]["kind"], "mandatory_task")
+
+    def test_ambiguous_relative_deadline_is_not_assumed_to_be_past(self) -> None:
+        """缺少上午/下午且模型给出已过去时刻时应保留待确认状态。"""
+        payload = {
+            "context_group_id": "group_test",
+            "messages": [
+                {
+                    "message_id": "msg_1",
+                    "occurred_at_local": "2026-06-11T10:07:52+08:00",
+                    "text": "今天 3:00 前提交纸质版。",
+                    "title": None,
+                    "url": None,
+                    "llm_text": "",
+                }
+            ],
+            "images": [],
+        }
+        activities = normalize_activity_response(
+            {
+                "activities": [
+                    {
+                        "title": "纸质版提交",
+                        "kind": "mandatory_task",
+                        "mandatory": True,
+                        "deadline": "2026-06-11T03:00:00+08:00",
+                        "evidence_message_ids": ["msg_1"],
+                        "evidence_quote": "今天 3:00 前提交纸质版",
+                    }
+                ]
+            },
+            payload,
+        )
+        self.assertIsNone(activities[0]["deadline"])
+        self.assertIn(
+            "截止时刻缺少上午/下午信息",
+            activities[0]["missing_information"],
         )
 
     def test_activity_extractor_writes_jsonl_with_fake_model(self) -> None:
@@ -444,6 +726,165 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(rows[0]["schema_version"], "wechat-extracted-activity/v1")
         self.assertIn("evidence_message_ids", rows[0])
 
+    def test_activity_extractor_links_supplement_to_existing_activity(self) -> None:
+        """后续窗口只能通过已有 activity_id 归入同一内部线程。"""
+        class FakeResponse:
+            content = ""
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def invoke(self, messages):
+                """按两次调用模拟新事项和后续补充。"""
+                payload = json.loads(messages[0].content)
+                message_id = payload["messages"][0]["message_id"]
+                self.calls += 1
+                if self.calls == 1:
+                    activity = {
+                        "title": "设备登记",
+                        "kind": "mandatory_task",
+                        "mandatory": True,
+                        "relation_type": "new",
+                        "evidence_message_ids": [message_id],
+                        "evidence_quote": payload["messages"][0]["text"],
+                    }
+                else:
+                    existing_id = payload["existing_activities"][0]["activity_id"]
+                    activity = {
+                        "title": "登记地点补充",
+                        "kind": "mandatory_task",
+                        "mandatory": True,
+                        "relation_type": "supplement",
+                        "related_activity_id": existing_id,
+                        "location": "A楼",
+                        "evidence_message_ids": [message_id],
+                        "evidence_quote": payload["messages"][0]["text"],
+                    }
+                response = FakeResponse()
+                response.content = json.dumps(
+                    {"activities": [activity]},
+                    ensure_ascii=False,
+                )
+                return response
+
+        records = [
+            {
+                "message_id": "msg_1",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_1",
+                "occurred_at": "2026-06-07T10:00:00+08:00",
+                "occurred_at_local": "2026-06-07T10:00:00+08:00",
+                "source_index": 1,
+                "message_type": "text",
+                "text": "请完成设备登记。",
+                "activity_features": {"candidate_score": 0.8},
+                "media": [],
+            },
+            {
+                "message_id": "msg_2",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_2",
+                "occurred_at": "2026-06-08T10:00:00+08:00",
+                "occurred_at_local": "2026-06-08T10:00:00+08:00",
+                "source_index": 2,
+                "message_type": "text",
+                "text": "登记地点补充为A楼。",
+                "activity_features": {"candidate_score": 0.8},
+                "media": [],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "normalized.jsonl"
+            output_path = Path(temp_dir) / "activities.jsonl"
+            input_path.write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in records)
+                + "\n",
+                encoding="utf-8",
+            )
+            count = extract_activities_from_jsonl(
+                input_path,
+                output_path,
+                chat_model=FakeModel(),
+            )
+            rows = [
+                json.loads(line)
+                for line in output_path.read_text(encoding="utf-8").splitlines()
+            ]
+        self.assertEqual(count, 2)
+        self.assertEqual(rows[0]["thread_id"], rows[1]["thread_id"])
+        self.assertEqual(rows[1]["related_activity_id"], rows[0]["activity_id"])
+        self.assertNotIn("topic_key", rows[0])
+        self.assertNotIn("topic_key", rows[1])
+
+    def test_activity_extractor_collapses_same_evidence_parent_and_child(self) -> None:
+        """同一证据的总事项与包含性子步骤只写入一条。"""
+        class FakeResponse:
+            content = ""
+
+        class FakeModel:
+            def invoke(self, messages):
+                """返回同一证据上的包含性重复结果。"""
+                payload = json.loads(messages[0].content)
+                message_id = payload["messages"][0]["message_id"]
+                response = FakeResponse()
+                response.content = json.dumps(
+                    {
+                        "activities": [
+                            {
+                                "title": "考试安排",
+                                "kind": "mandatory_task",
+                                "mandatory": True,
+                                "evidence_message_ids": [message_id],
+                            },
+                            {
+                                "title": "考试安排准考证盖章",
+                                "kind": "mandatory_task",
+                                "mandatory": True,
+                                "required_action": "统一盖章",
+                                "evidence_message_ids": [message_id],
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+                return response
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "normalized.jsonl"
+            output_path = Path(temp_dir) / "activities.jsonl"
+            input_path.write_text(
+                json.dumps(
+                    {
+                        "message_id": "msg_1",
+                        "conversation_id": "conv_1",
+                        "context_group_id": "group_1",
+                        "occurred_at": "2026-06-07T10:00:00+08:00",
+                        "occurred_at_local": "2026-06-07T10:00:00+08:00",
+                        "source_index": 1,
+                        "message_type": "text",
+                        "text": "考试当天参加考试，准考证统一盖章。",
+                        "activity_features": {"candidate_score": 0.8},
+                        "media": [],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            count = extract_activities_from_jsonl(
+                input_path,
+                output_path,
+                chat_model=FakeModel(),
+            )
+            rows = [
+                json.loads(line)
+                for line in output_path.read_text(encoding="utf-8").splitlines()
+            ]
+        self.assertEqual(count, 1)
+        self.assertEqual(rows[0]["title"], "考试安排准考证盖章")
+        self.assertEqual(rows[0]["required_action"], "统一盖章")
+
     def test_activity_summary_merges_duplicates_and_images(self) -> None:
         """验证 activity_summary_merges_duplicates_and_images 的行为符合预期。"""
         duplicate_a = {
@@ -473,6 +914,81 @@ class WeChatNormalizerTests(unittest.TestCase):
             ["img_1", "img_2"],
         )
         self.assertEqual(merged[0]["confidence"], 0.9)
+
+    def test_activity_summary_merges_explicit_thread_across_time_groups(self) -> None:
+        """只有显式线程关系可以稳定跨时间组合并。"""
+        base = {
+            "schema_version": "wechat-extracted-activity/v1",
+            "kind": "mandatory_task",
+            "mandatory": True,
+            "registration_url": None,
+            "related_images": [],
+            "missing_information": [],
+            "confidence": 0.8,
+        }
+        merged = merge_activities(
+            [
+                {
+                    **base,
+                    "activity_id": "activity_1",
+                    "thread_id": "activity_1",
+                    "context_group_id": "group_1",
+                    "title": "填写审核信息",
+                    "evidence_message_ids": ["msg_1"],
+                    "evidence_quote": "请填写相关信息",
+                },
+                {
+                    **base,
+                    "activity_id": "activity_2",
+                    "thread_id": "activity_1",
+                    "relation_type": "supplement",
+                    "related_activity_id": "activity_1",
+                    "context_group_id": "group_2",
+                    "title": "提交审核材料",
+                    "evidence_message_ids": ["msg_2"],
+                    "evidence_quote": "纸质材料交到办公室",
+                },
+            ]
+        )
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(
+            merged[0]["source_context_group_ids"],
+            ["group_1", "group_2"],
+        )
+        self.assertEqual(
+            merged[0]["evidence_quotes"],
+            ["请填写相关信息", "纸质材料交到办公室"],
+        )
+
+    def test_topic_key_does_not_merge_unrelated_activities(self) -> None:
+        """旧数据中的同名主题键不能作为事项身份。"""
+        merged = merge_activities(
+            [
+                {
+                    "topic_key": "共享主题",
+                    "context_group_id": "group_1",
+                    "title": "设备维护预约",
+                    "summary": "预约设备维护",
+                    "mandatory": False,
+                    "evidence_message_ids": ["msg_1"],
+                    "related_images": [],
+                    "missing_information": [],
+                    "confidence": 0.8,
+                },
+                {
+                    "topic_key": "共享主题",
+                    "context_group_id": "group_2",
+                    "title": "会议签到提醒",
+                    "summary": "参加会议时签到",
+                    "mandatory": True,
+                    "evidence_message_ids": ["msg_2"],
+                    "related_images": [],
+                    "missing_information": [],
+                    "confidence": 0.8,
+                },
+            ]
+        )
+        self.assertEqual(len(merged), 2)
 
     def test_activity_summary_classifies_sections(self) -> None:
         """验证 activity_summary_classifies_sections 的行为符合预期。"""
@@ -519,7 +1035,20 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(summary["counts"]["merged_activities"], 3)
         self.assertEqual(len(summary["mandatory_tasks"]), 2)
         self.assertEqual(len(summary["recommended_activities"]), 1)
-        self.assertEqual(len(summary["incomplete_items"]), 1)
+        self.assertEqual(len(summary["incomplete_items"]), 0)
+        identities = []
+        for section in (
+            "mandatory_tasks",
+            "recommended_activities",
+            "incomplete_items",
+            "other_activities",
+            "cancelled_or_updated",
+        ):
+            identities.extend(
+                item["evidence_message_ids"][0]
+                for item in summary[section]
+            )
+        self.assertEqual(len(identities), len(set(identities)))
 
     def test_summary_renderer_embeds_related_images(self) -> None:
         """验证 summary_renderer_embeds_related_images 的行为符合预期。"""

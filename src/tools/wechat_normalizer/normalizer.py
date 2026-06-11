@@ -140,6 +140,23 @@ DATE_KEYWORDS = (
     "周日",
 )
 
+GENERIC_ACTION_RE = re.compile(
+    r"(提交|填写|完成|办理|缴纳|确认|反馈|收集|领取|携带|联系|参加|报名|"
+    r"加入|签到|签字|报送|登记|申请|预约|投票)"
+)
+GENERIC_EVENT_RE = re.compile(
+    r"(通知|提醒|安排|要求|事项|将于|定于|举行|召开|开展|开始|开赛|"
+    r"招募|征集|开放|延期|取消|更正|修改|变更|补充)"
+)
+GENERIC_AUDIENCE_RE = re.compile(
+    r"(@所有人|@All|各位|全体|相关人员|同学们|老师们|成员们|参与者)"
+)
+GENERIC_DIRECTIVE_RE = re.compile(
+    r"(必须|务必|不得|应当|一定|须|请于|最迟|截止|请.{0,16}"
+    r"(?:提交|填写|完成|办理|缴纳|确认|反馈|参加|报名)|"
+    r"需要.{0,16}(?:提交|填写|完成|办理|缴纳|确认|反馈|参加|报名))"
+)
+
 
 @dataclass
 class NormalizationResult:
@@ -623,25 +640,34 @@ def _activity_features(
     message_type: str,
     has_media: bool,
 ) -> dict[str, Any]:
-    """从中文微信文本中计算活动候选信号。"""
+    """使用通用语言结构计算候选分数，领域词只用于弱分类。"""
     normalized = text.lower()
     tags = sorted(
         tag
         for tag, keywords in ACTIVITY_KEYWORDS.items()
         if any(keyword.lower() in normalized for keyword in keywords)
     )
-    mandatory = any(keyword in text for keyword in MANDATORY_KEYWORDS)
+    mandatory = bool(GENERIC_DIRECTIVE_RE.search(text))
     has_date_signal = any(keyword in text for keyword in DATE_KEYWORDS) or bool(
         re.search(r"\d{1,2}\s*[月/-]\s*\d{1,2}\s*[日号]?", text)
     )
+    has_action_signal = bool(GENERIC_ACTION_RE.search(text))
+    has_event_signal = bool(GENERIC_EVENT_RE.search(text))
+    has_audience_signal = bool(GENERIC_AUDIENCE_RE.search(text))
 
     score = 0.0
     if tags:
-        score += min(0.5, 0.22 + 0.1 * len(tags))
+        score += min(0.1, 0.05 * len(tags))
+    if has_action_signal:
+        score += 0.22
+    if has_event_signal:
+        score += 0.18
     if mandatory:
-        score += 0.3
+        score += 0.28
     if has_date_signal:
         score += 0.2
+    if has_audience_signal:
+        score += 0.12
     if message_type == "link":
         score += 0.08
     if has_media:
@@ -653,6 +679,9 @@ def _activity_features(
         "tags": tags,
         "mandatory_signal": mandatory,
         "date_signal": has_date_signal,
+        "action_signal": has_action_signal,
+        "event_signal": has_event_signal,
+        "audience_signal": has_audience_signal,
     }
 
 

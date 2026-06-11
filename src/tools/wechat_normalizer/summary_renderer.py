@@ -154,7 +154,15 @@ def _render_item(item: dict[str, Any], export_root: Path, badge: str) -> str:
         ("链接", _link(item.get("registration_url"))),
         ("缺失", "、".join(_text(value) for value in item.get("missing_information", []) if _text(value))),
     ]
-    evidence = _text(item.get("evidence_quote"))
+    raw_evidence_quotes = item.get("evidence_quotes")
+    evidence_quotes = [
+        text
+        for value in raw_evidence_quotes
+        if (text := _text(value))
+    ] if isinstance(raw_evidence_quotes, list) else []
+    if not evidence_quotes:
+        evidence = _text(item.get("evidence_quote"))
+        evidence_quotes = [evidence] if evidence else []
     tags = item.get("category_tags", [])
     tag_html = "".join(
         f'<span class="tag">{html.escape(str(tag))}</span>'
@@ -176,7 +184,10 @@ def _render_item(item: dict[str, Any], export_root: Path, badge: str) -> str:
             "</div>",
             f'<div class="tags">{tag_html}</div>' if tag_html else "",
             f"<dl>{details}</dl>" if details else "",
-            f'<blockquote>{html.escape(evidence)}</blockquote>' if evidence else "",
+            "".join(
+                f'<blockquote>{html.escape(evidence)}</blockquote>'
+                for evidence in evidence_quotes
+            ),
             images,
             "</article>",
         ]

@@ -16,7 +16,8 @@ ACTIVITY_EXTRACTION_INSTRUCTION = """
 4. 更正、延期、取消等消息必须标记 update_type。
 5. 相对时间以 occurred_at_local 为基准解析；无法确定时保留原文并返回 null。
 6. mandatory 表示用户必须完成，不表示所有活动都值得推荐。
-7. 输出一个 JSON 对象，不输出 Markdown。
+7. 不生成领域主题键；后续关联使用 activity_id/thread_id。
+8. 输出一个 JSON 对象，不输出 Markdown。
 """.strip()
 
 
@@ -75,7 +76,8 @@ ACTIVITY_EXTRACTION_INSTRUCTION = """
 4. 更正、延期、取消等消息必须标记 update_type。
 5. 相对时间以 occurred_at_local 为基准解析；无法确定时保留原文并返回 null。
 6. mandatory 表示用户必须完成，不表示所有活动都值得推荐。
-7. 输出一个 JSON 对象，不输出 Markdown。
+7. 不生成领域主题键；后续关联使用 activity_id/thread_id。
+8. 输出一个 JSON 对象，不输出 Markdown。
 """.strip()
 
 WEEKLY_SUMMARY_INSTRUCTION = """
