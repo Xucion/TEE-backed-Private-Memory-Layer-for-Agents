@@ -1,17 +1,182 @@
-# Confidential Agent Memory Vault
+# 微信聊天活动报告助手
 
-## 微信活动报告助手
+本项目面向一个直接的实际场景：从自己的微信聊天记录中导出指定联系人或群聊在某段时间内的消息，自动提取活动、通知、截止时间和待办事项，并生成可独立分享的 HTML/PDF 报告。
 
-`src/tools/` 中包含一套独立的微信活动报告工具链，可以把微信 JSON 导出目录转换为适合分享的活动/待办报告。该工具链独立于 Agent/Vault 运行时，不读取也不修改 vault 记忆文件。
+项目通过 `externalAPI/WeChatDataAnalysis` 访问和导出本机微信数据，通过 DashScope 通义千问提取结构化事项，其余规范化、筛选、合并和渲染步骤均在本地完成。
 
-在项目根目录一键生成：
+典型使用方式：
+
+```text
+帮我生成卫星互联网研究所（25级）近一周聊天内容的活动总结
+帮我生成和寻徐今天的聊天内容的活动总结
+```
+
+也可以完全绕过对话 Agent，直接用命令行从微信导出 API 或已有 JSON 导出目录生成报告。
+
+> 本项目只应处理你有权访问和分析的聊天记录。导出文件、HTML 和 PDF 都可能包含个人信息，请勿提交到 Git 或上传到不受信任的位置。
+
+## 能做什么
+
+- 按联系人、群聊和时间范围导出微信聊天记录。
+- 从自然语言中识别联系人/群名以及今天、昨天、本周、上周、近一周或明确日期。
+- 提取活动通知、必须完成的任务、报名方式、截止时间、地点和证据消息。
+- 合并重复通知，识别补充、更新和取消关系。
+- 过滤大部分普通闲聊，减少发送给外部模型的文本和调用成本。
+- 生成结构化 JSON、可浏览 HTML 和适合发群的 PDF。
+- 将相关图片内嵌到 HTML/PDF，但不对图片做 OCR 或视觉分析。
+- 支持先检查 LLM 请求载荷、跳过重复提取和只生成 HTML。
+
+## 处理流程
+
+```text
+本机微信数据
+    |
+    v
+WeChatDataAnalysis
+  联系人查询 / JSON 导出 / 媒体打包
+    |
+    v
+下载 ZIP 并安全解压
+    |
+    v
+本地规范化与候选时间段筛选
+    |
+    v
+DashScope/Qwen 提取活动和待办
+    |
+    v
+本地合并、分类与排序
+    |
+    v
+HTML / PDF / JSON 报告
+```
+
+只有“活动和待办提取”会调用外部 LLM。图片本体不会发送给模型。
+
+## 快速开始
+
+### 1. 准备环境
+
+运行要求：
+
+- Python 3.10+
+- 有效的 `DASHSCOPE_API_KEY`
+- Chrome、Edge 或 Chromium，仅在生成 PDF 时需要
+- 直接从本机微信导出时，需要在 Windows 上运行 WeChatDataAnalysis
+
+如果已经有符合格式的 JSON 导出目录，后续报告处理不要求运行在 Windows。
+
+项目依赖记录在 `requirements.txt`。创建并激活虚拟环境后安装：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+设置 DashScope API key：
+
+```powershell
+$env:DASHSCOPE_API_KEY="<YOUR_DASHSCOPE_API_KEY>"
+```
+
+可选指定模型，默认是 `qwen-turbo`：
+
+```powershell
+$env:TONGYI_MODEL="qwen-turbo"
+```
+
+### 2. 启动微信数据服务
+
+`externalAPI/WeChatDataAnalysis` 是本项目使用的外部微信解密、浏览和导出工具。本仓库只调用它提供的 HTTP API，不修改其源码。
+
+在 Windows 上按该工具自己的文档完成微信数据解密或导入。源码开发模式的常见启动方式是：
+
+```powershell
+cd .\externalAPI\WeChatDataAnalysis
+.\start-dev.cmd
+```
+
+默认地址：
+
+```text
+前端：http://127.0.0.1:3000
+API：http://127.0.0.1:10392
+文档：http://127.0.0.1:10392/docs
+```
+
+检查服务：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:10392/api/health
+```
+
+### 3. 一键导出并生成报告
+
+先在 WeChatDataAnalysis 页面或联系人接口中确认：
+
+- `account`：已解密的微信账号目录名，可选。
+- `username`：目标联系人或群聊的内部会话 ID。
+- `start-time` / `end-time`：Unix 秒级时间戳。
+
+然后在本项目根目录运行：
 
 ```powershell
 python .\src\tools\build_wechat_activity_report.py `
-  --input .\src\tools\wechatOutput\wechat_chat_xunxu_2026-06-07_json
+  --wechat-api http://127.0.0.1:10392 `
+  --account "<ACCOUNT>" `
+  --username "<CONVERSATION_USERNAME>" `
+  --start-time <START_UNIX_SECONDS> `
+  --end-time <END_UNIX_SECONDS> `
+  --export-name "wechat_report_2026-06-01_2026-06-07" `
+  --output-root .\src\tools\wechatOutput
 ```
 
-默认会在导出目录下生成：
+该命令会依次完成：
+
+1. 创建 WeChatDataAnalysis 导出任务。
+2. 轮询任务状态并下载 ZIP。
+3. 在 `src/tools/wechatOutput/` 下安全解压。
+4. 规范化消息并过滤低相关闲聊。
+5. 调用 Qwen 提取活动和待办。
+6. 生成 JSON、HTML 和 PDF。
+
+部分 WeChatDataAnalysis 部署需要显式传入后端输出目录：
+
+```powershell
+--backend-output-dir "D:\path\to\WeChatDataAnalysis\exports"
+```
+
+不需要媒体文件时可以减少导出体积：
+
+```powershell
+--no-media
+```
+
+需要启用 WeChatDataAnalysis 自身提供的隐私导出模式时：
+
+```powershell
+--privacy-mode
+```
+
+## 从已有导出生成
+
+如果已经通过 WeChatDataAnalysis 得到 JSON 导出目录，可以不再调用微信导出 API：
+
+```powershell
+python .\src\tools\build_wechat_activity_report.py `
+  --input .\src\tools\wechatOutput\<EXPORT_DIRECTORY>
+```
+
+输入目录应包含：
+
+```text
+manifest.json
+conversations/
+media/              # 可选
+```
+
+默认在该目录内生成：
 
 ```text
 normalized_messages.jsonl
@@ -22,761 +187,309 @@ weekly_activity_summary.html
 weekly_activity_summary.pdf
 ```
 
-只有活动提取步骤会调用外部大模型：
+其中 `weekly_activity_summary.pdf` 最适合直接分享；HTML 中的关联图片也会以内嵌 base64 形式保存，不依赖原始媒体路径。
 
-```text
-normalize_wechat_export.py      仅本地处理
-extract_wechat_activities.py    通过 DashScope 调用通义千问/Qwen
-summarize_wechat_activities.py  仅本地处理
-render_wechat_summary.py        仅本地处理
-```
+## 常用选项
 
-默认会在调用大模型前过滤疑似闲聊的时间段：
+### 检查将发送给 LLM 的内容
 
-```text
-minimum_score = 0.3
-include_all = false
-```
-
-常用安全和调试选项：
+`--dry-run-llm` 只生成请求载荷，不调用模型，也不继续汇总和渲染：
 
 ```powershell
-# 复用已有 extracted_activities.jsonl，不调用大模型。
 python .\src\tools\build_wechat_activity_report.py `
-  --input .\src\tools\wechatOutput\wechat_chat_xunxu_2026-06-07_json `
-  --skip-extract
-
-# 只生成待发送给大模型的 payload，便于人工检查，不调用大模型。
-python .\src\tools\build_wechat_activity_report.py `
-  --input .\src\tools\wechatOutput\wechat_chat_xunxu_2026-06-07_json `
+  --input .\src\tools\wechatOutput\<EXPORT_DIRECTORY> `
   --dry-run-llm
 ```
 
-图片不会做 OCR，也不会交给视觉模型分析。工具只记录图片元信息，并通过 `context_group_id` 将图片和相近时间段的文本关联起来。渲染出的 HTML 会把相关图片以内嵌 base64 的形式写入，生成的 PDF 也会包含图片，因此推荐将 PDF 作为最终发群文件。
-
-详细说明见 `src/tools/wechat_normalizer/README.md`。
-
-Agent 侧也提供了对话式微信报告入口，实现在 `src/untrusted/wechat_activity_report_tool.py`。用户可以直接说：
+检查：
 
 ```text
-帮我生成卫星互联网研究所（25级）一周聊天内容的活动总结
-帮我生成和寻徐今天的聊天内容的活动总结
+activity_payloads.dryrun.jsonl
 ```
 
-该入口会通过 LangGraph 子图执行：
+### 复用已有提取结果
+
+修改分类或渲染逻辑后，可以复用已有 `extracted_activities.jsonl`，避免再次调用 LLM：
+
+```powershell
+python .\src\tools\build_wechat_activity_report.py `
+  --input .\src\tools\wechatOutput\<EXPORT_DIRECTORY> `
+  --skip-extract
+```
+
+### 只生成 HTML
+
+```powershell
+python .\src\tools\build_wechat_activity_report.py `
+  --input .\src\tools\wechatOutput\<EXPORT_DIRECTORY> `
+  --no-pdf
+```
+
+### 调整闲聊过滤
+
+默认只把候选分数不低于 `0.3` 的时间段发送给 LLM：
+
+```powershell
+--minimum-score 0.3
+```
+
+调试时可以发送所有文本时间段：
+
+```powershell
+--include-all
+```
+
+日常不建议使用 `--include-all`，因为它会增加 API 成本和隐私暴露范围。
+
+## 对话式生成
+
+项目提供 FastAPI + LangGraph 对话入口。它会从自然语言和短期对话历史中补齐目标会话与时间范围：
+
+```text
+用户：帮我生成今天的微信活动总结
+助手：还需要群名或联系人名称
+用户：寻徐
+```
+
+微信报告子图：
 
 ```text
 route_intent -> parse_request -> resolve_contact -> build_report -> final_response
 ```
 
-`parse_request` 会从自然语言和短期对话历史中同时提取对象和时间范围；对象可以是联系人或群名，时间支持今天、昨天、前天、本周、上周、近一周和明确日期。缺少对象或时间时，Agent 会追问缺失槽位，并在下一轮复用上一轮上下文。
+当用户只提供展示名称时，Agent 会调用联系人查询接口解析 `username`，随后自动导出并生成报告。
 
-当用户没有直接给出 `username` 时，`resolve_contact` 会调用 WeChatDataAnalysis 的联系人接口：
+### 启动条件
 
-```text
-GET /api/chat/contacts?keyword=<对象名>&include_friends=true&include_groups=false&include_officials=false
-```
+对话式模式额外需要：
 
-内网部署时可通过环境变量配置外部微信导出工具，地址和路径按实际环境替换：
+- Redis，用于短期多轮历史。
+- 可访问的 WeChatDataAnalysis API。
+- DashScope API key。
 
-```bash
-export WECHAT_EXPORT_API_BASE="http://<WECHAT_WINDOWS_HOST>:10392"
-export WECHAT_REPORT_OUTPUT_ROOT="src/tools/wechatOutput"
-export WECHAT_EXPORT_BACKEND_OUTPUT_DIR="<WECHAT_BACKEND_EXPORT_DIR>"
-```
+长期记忆 Vault 不是生成微信报告的必需组件。只使用微信报告时，可以让客户端以 `--no-vault` 模式运行。
 
-一个具备隐私保护长期记忆能力的对话 Agent 原型。项目提供 FastAPI Agent 服务和保留的 CLI 入口，把外部 LLM 调用、短期会话和记忆抽取放在 `src/untrusted/`，把长期记忆的密钥管理、加密存储、向量检索、记忆生命周期管理和隐私最小化放在 `src/trusted/` vault 侧。
-
-欢迎联系讨论。
-
-当前代码已经从早期的单一全局记忆文件推进到：
-
-- per-user 记忆文件：`vault_data/{user_id}.memories.enc`
-- per-user Fernet key 注入：通过安全信道进入 vault 进程内存
-- 模拟 remote attestation：固定 measurement + 开发私钥签名 quote
-- 应用层加密信道：X25519 派生会话密钥，AES-GCM 加密请求和响应
-- 客户端端到端 key provisioning：FastAPI 只转发握手和密文 envelope
-- Agent capability 数据面：FastAPI 不读取用户 key，也不保存 client-vault channel key
-- Redis 短期会话历史：按 capability 指纹和 conversation session 隔离
-- 记忆生命周期：active、superseded、expired、forgotten
-- 记忆管理命令：列出和遗忘指定 memory
-
-注意：当前 secure channel 和 attestation 是开发原型，不是真实 SGX remote attestation。`gramine-direct` 可以托管 vault server，但不提供 SGX 硬件隔离。
-
-## 当前状态
-
-- `src/untrusted/api_server.py` 提供 FastAPI `/chat`、`/health` 和 provisioning relay。
-- `src/client/vault_client.py` 在客户端本地验证模拟 RA、派生信道密钥并加密注入用户 key。
-- FastAPI `/chat` 只接收 `X-Vault-Capability`，不接收 `USER_MEMORY_KEY`。
-- Agent 使用 capability 调用 vault 的 `retrieve/store` 数据面。
-- 旧 CLI 仍可使用 secure session；旧版明文 `store` / `retrieve` 默认禁用。
-- Vault 使用用户 key 加密对应用户的 `vault_data/{user_id}.memories.enc`。
-- Vault 进程重启后，用户 key 需要重新注入。
-- 客户端没有提供 key 时会生成新 Fernet key；客户端必须自行安全保存，否则重启后无法读取旧记忆。
-- 当前仍依赖 DashScope 的 Tongyi 模型和 `text-embedding-v4` embedding 服务。
-
-## 主要功能
-
-### 对话 Agent
-
-- 使用 FastAPI 暴露 `POST /chat`。
-- `AgentService` 在 FastAPI lifespan 中初始化 Redis 和 LLM。
-- 使用 LangGraph 构建 `retrieve_memory -> chatbot` 两节点流程。
-- 使用 `ChatTongyi` 调用通义千问模型。
-- Redis 保存带 TTL 的短期多轮历史。
-- 每轮用户输入前通过 capability 从 vault 检索长期记忆上下文。
-- 每轮回复后异步抽取并存储用户长期记忆。
-- capability 缺失时可以降级为无长期记忆聊天；capability 存在但 vault 检索失败时会继续无记忆回答，并记录日志。
-- 微信活动报告请求会优先进入工具子图，不写入长期记忆。
-
-### 记忆抽取
-
-- 只分析 `HumanMessage`，避免助手回复污染长期记忆。
-- 调用外部 LLM 输出结构化 JSON。
-- 支持字段包括：
-  - `content`
-  - `memory_type`
-  - `sensitivity`
-  - `subject`
-  - `predicate`
-  - `object`
-  - `value`
-  - `slot`
-  - `confidence`
-  - `source`
-- 过滤问题、临时请求、元记忆查询和非用户来源记忆。
-- 将第一人称表达规范化为“用户...”。
-
-### 安全信道和模拟 RA
-
-- 客户端通过 `handshake_start` 发起握手。
-- Vault 返回模拟 quote、签名、`session_id` 和 vault X25519 公钥。
-- 客户端用 `src/interface/sim_ra_public_key.pem` 验证 quote 签名。
-- Vault 用 `src/trusted/sim_ra_private_key.pem` 签名 quote。
-- 双方通过 X25519 计算共享秘密，并用 HKDF 派生 32 字节信道密钥。
-- 后续 secure payload 使用 AES-GCM 加密，并把 `session_id` 作为 associated data。
-- session 当前 TTL 为 300 秒。
-- key 注入成功后，Vault 返回只具备 `store/retrieve` scope 的 capability，TTL 为 3600 秒。
-- FastAPI provisioning relay 不解密 payload，也不持有 channel key。
-
-这套流程只证明“对端持有当前项目里的模拟私钥”，不能证明运行在真实 SGX enclave 中。
-
-### Vault Server
-
-`src/trusted/vault_server.py` 提供本地 JSON line socket 服务，默认监听 `127.0.0.1:8765`。
-
-支持的外层 action：
-
-- `attest`
-- `handshake_start`
-- `secure_ping`
-- `secure_provision_user_key`
-- `secure_request`
-- `capability_request`
-- `store` 和 `retrieve`，仅在 `VAULT_ALLOW_LEGACY_PLAINTEXT=1|true|yes` 时允许
-
-`secure_request` 支持的内部 action：
-
-- `store`
-- `retrieve`
-- `list_memories`
-- `forget`
-
-### Per-User 记忆隔离
-
-- FastAPI 数据面不再使用 `VAULT_USER_ID` 或服务端 `USER_MEMORY_KEY`。
-- 客户端通过加密 provisioning payload 提交 `user_id` 和 Fernet key。
-- Vault 内部使用 `src/trusted/user_key_manager.py` 将 `user_id -> user_key` 保存在进程内存。
-- 每个用户对应独立密文文件：`vault_data/{user_id}.memories.enc`。
-- secure session 在第一次 provisioning 后绑定 user_id，后续不能切换用户。
-- capability 在 Vault 内绑定 user_id，数据面忽略调用者提供的 user_id。
-- 已存在 user_id 不能被静默覆盖成另一个 Fernet key。
-
-### 记忆存储和检索
-
-`src/trusted/memory_store.py` 负责：
-
-- 使用用户 Fernet key 加密和解密 per-user memory 文件。
-- 为新记忆生成 `id`、时间戳、状态字段、embedding、`fact_key` 和 `conflict_key`。
-- 使用 DashScope `text-embedding-v4` 生成记忆 embedding。
-- 根据 `fact_key` 合并重复事实。
-- 根据 `slot` / `conflict_key` 将互斥旧事实标记为 `superseded`。
-- 在同类记忆中用 embedding 相似度合并语义重复项。
-- 在加载时把过期 active 记忆标记为 `expired`。
-- 支持 soft delete，把 active 记忆标记为 `forgotten`。
-
-`src/trusted/memory_retriever.py` 负责：
-
-- 只检索 `active` 且有 embedding 的记忆。
-- 只对 query 做一次 embedding。
-- 使用 numpy 计算余弦相似度。
-- 返回 top-k 且超过 threshold 的结果。
-- 更新被召回记忆的 `last_accessed_at` 和 `access_count`。
-
-### Context Minimizer
-
-Vault 在返回给 Agent 前会做最小化处理：
-
-- `sensitivity == "high"` 的记忆不返回原文，只返回类别级提示。
-- 低敏记忆返回 `content`。
-- 去重后拼接为 `memory_context`。
-
-## 架构
-
-```text
-Client SDK
-  |  本地验证模拟 RA / 派生 channel_key / 加密 user key
-  v
-FastAPI relay ---------------------------------> src/trusted/vault_server.py
-  |  只转发 handshake 和 encrypted envelope              |
-  |                                                       v
-  |<---------------- encrypted capability -------- src/trusted/user_key_manager.py
-  |
-  |  POST /chat + X-Vault-Capability
-  v
-src/untrusted/agent_runtime.py
-  |-- Redis：短期 history
-  |-- Tongyi：生成回复
-  |-- capability_request(retrieve/store)
-  v
-src/trusted/vault_server.py
-  |
-  +--> src/trusted/memory_store.py
-  +--> src/trusted/memory_retriever.py
-  |
-  v
-vault_data/{user_id}.memories.enc
-```
-
-## 运行要求
-
-- Python 3.10+
-- 有效的 `DASHSCOPE_API_KEY`
-- Gramine，用于 `gramine-direct` 原型运行
-- 如需真实 SGX，需要可用的 Intel SGX 硬件和后续 `gramine-sgx` 配置
-
-Python 依赖见 `requirements.txt`：
-
-- `langgraph`
-- `langchain-community`
-- `dashscope`
-- `numpy`
-- `cryptography`
-- `fastapi`
-- `redis`
-- `uvicorn`
-
-## 安装依赖
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-## 配置环境变量
-
-必需：
-
-```bash
-export DASHSCOPE_API_KEY="your_dashscope_api_key"
-```
-
-推荐配置：
-
-```bash
-export TONGYI_MODEL="qwen-turbo"
-export VAULT_HOST="127.0.0.1"
-export VAULT_PORT="8765"
-export REDIS_URL="redis://127.0.0.1:6379/0"
-export CHAT_HISTORY_TTL_SECONDS="86400"
-export VAULT_LOG_LEVEL="INFO"
-export API_LOG_LEVEL="INFO"
-export WECHAT_EXPORT_API_BASE="http://127.0.0.1:10392"
-export PYTHONPATH="$(pwd)/src"
-```
-
-调试旧版明文 API 时才需要：
-
-```bash
-export VAULT_ALLOW_LEGACY_PLAINTEXT="1"
-```
-
-## 运行项目
-
-项目推荐拆成两个运行角色：
-
-- Windows 机器：运行 `externalAPI/WeChatDataAnalysis`，访问本机微信数据，并提供微信导出 HTTP API。
-- Linux/Ubuntu 服务器：运行 Redis、Vault、FastAPI Agent 和聊天客户端；如果需要 Gramine/SGX，也在这一侧运行。
-
-如果只测试普通聊天，可以不启动 Windows 微信导出工具。如果要让 Agent 通过对话生成微信活动报告，则必须让 Ubuntu 侧能访问 Windows 侧的 WeChatDataAnalysis API。
-
-### 一、Windows：启动微信导出工具
-
-在 Windows 上启动 `externalAPI/WeChatDataAnalysis`。具体启动方式以该外部工具自己的文档为准，项目内常见入口是：
+配置：
 
 ```powershell
-cd <PROJECT_DIR>\externalAPI\WeChatDataAnalysis
-.\start-dev.cmd
+$env:DASHSCOPE_API_KEY="<YOUR_DASHSCOPE_API_KEY>"
+$env:REDIS_URL="redis://127.0.0.1:6379/0"
+$env:WECHAT_EXPORT_API_BASE="http://127.0.0.1:10392"
+$env:WECHAT_REPORT_OUTPUT_ROOT="src/tools/wechatOutput"
 ```
 
-确认本机服务正常：
+如果 WeChatDataAnalysis 要求后端绝对输出目录，再设置：
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:10392/api/health
+$env:WECHAT_EXPORT_BACKEND_OUTPUT_DIR="<WECHAT_BACKEND_EXPORT_DIR>"
 ```
-
-然后确认 Ubuntu 服务器能访问 Windows 的内网地址：
-
-```bash
-curl http://<WECHAT_WINDOWS_HOST>:10392/api/health
-```
-
-如果访问失败，通常需要检查 Windows 防火墙、服务监听地址和两台机器是否处于同一内网。
-
-### 二、Ubuntu：准备公共环境
-
-进入项目目录并配置基础环境：
-
-```bash
-cd <PROJECT_DIR>
-export PYTHONPATH="$(pwd)/src"
-export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
-```
-
-确认 Python 依赖已经安装：
-
-```bash
-<PYTHON> -m pip install -r requirements.txt
-```
-
-其中 `<PYTHON>` 可以是系统 Python、虚拟环境 Python 或 Conda 环境 Python。
-
-### 三、Ubuntu：启动 Redis
-
-Agent 服务需要 Redis 保存短期会话历史。可以使用本机 Redis，也可以用 Docker。无论采用哪种方式，Redis 都建议只监听 `127.0.0.1`。
-
-Docker 示例：
-
-```bash
-docker run -d \
-  --name camv-redis \
-  --network host \
-  redis:7-alpine \
-  redis-server --bind 127.0.0.1 --protected-mode yes
-```
-
-已经创建过容器时，直接启动：
-
-```bash
-docker start camv-redis
-docker exec camv-redis redis-cli ping
-```
-
-正常应返回 `PONG`。
-
-### 四、Ubuntu：启动 Vault
-
-普通 Python 模式：
-
-```bash
-cd <PROJECT_DIR>
-export PYTHONPATH="$(pwd)/src"
-export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
-export VAULT_HOST="127.0.0.1"
-export VAULT_PORT="8765"
-
-<PYTHON> src/trusted/vault_server.py
-```
-
-也可以用 Gramine direct 启动：
-
-```bash
-cd <PROJECT_DIR>
-export PYTHONPATH="$(pwd)/src"
-export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
-
-gramine-manifest \
-  -Dproject_dir="$(pwd)" \
-  deployment/gramine/vault.manifest.template \
-  deployment/gramine/vault.manifest
-
-gramine-direct deployment/gramine/vault
-```
-
-`gramine-direct` 只验证 Gramine 运行兼容性，不提供真实 SGX 硬件隔离。生成的 `deployment/gramine/vault.manifest` 可能包含环境变量，不要提交或公开。
-
-### 五、Ubuntu：启动 FastAPI Agent
-
-如果需要微信活动报告能力，先配置 Windows WeChatDataAnalysis 地址：
-
-```bash
-export WECHAT_EXPORT_API_BASE="http://<WECHAT_WINDOWS_HOST>:10392"
-export WECHAT_REPORT_OUTPUT_ROOT="src/tools/wechatOutput"
-export WECHAT_EXPORT_BACKEND_OUTPUT_DIR="<WECHAT_BACKEND_EXPORT_DIR>"
-```
-
-其中：
-
-- `WECHAT_EXPORT_API_BASE` 是 Ubuntu 访问 Windows WeChatDataAnalysis 的 HTTP 地址。
-- `WECHAT_REPORT_OUTPUT_ROOT` 是 Agent 侧保存报告产物的目录。
-- `WECHAT_EXPORT_BACKEND_OUTPUT_DIR` 是 WeChatDataAnalysis 后端执行导出时使用的输出目录，格式按 Windows 后端实际要求填写。
 
 启动 Agent：
 
-```bash
-cd <PROJECT_DIR>
-export PYTHONPATH="$(pwd)/src"
-export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
-export REDIS_URL="redis://127.0.0.1:6379/0"
-export VAULT_HOST="127.0.0.1"
-export VAULT_PORT="8765"
-
-<PYTHON> -m uvicorn \
-  untrusted.api_server:app \
-  --app-dir src \
-  --host 0.0.0.0 \
+```powershell
+python -m uvicorn untrusted.api_server:app `
+  --app-dir src `
+  --host 127.0.0.1 `
   --port 8000
 ```
 
 健康检查：
 
-```bash
-curl http://127.0.0.1:8000/health
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-服务器只需要向内网开放 FastAPI 的 `8000` 端口。Redis `6379` 和 Vault `8765` 应只允许服务器本机访问。
+启动无 Vault 客户端：
 
-### 六、可选：运行微信报告环境诊断
-
-第一次部署、换机器、换网络或修改环境变量后，可以运行诊断脚本检查微信报告链路的基础依赖。日常生成报告前不必每次运行。
-
-```bash
-cd <PROJECT_DIR>
-export PYTHONPATH="$(pwd)/src"
-
-<PYTHON> src/tools/check_wechat_report_env.py \
-  --wechat-api http://<WECHAT_WINDOWS_HOST>:10392 \
-  --contact-keyword "<CONTACT_OR_GROUP_NAME>" \
-  --output-root src/tools/wechatOutput \
-  --backend-output-dir "<WECHAT_BACKEND_EXPORT_DIR>"
-```
-
-该脚本会检查：
-
-- WeChatDataAnalysis `/api/health`
-- 可选的联系人/群名查询接口
-- `DASHSCOPE_API_KEY`
-- 报告输出目录是否可写
-- `WECHAT_EXPORT_BACKEND_OUTPUT_DIR` 是否配置
-- Chrome/Edge/Chromium PDF 浏览器
-- Redis ping
-- Vault socket 是否可连接
-
-检查结果中的 `WARN` 表示能力可能降级，例如无法生成 PDF 或无法使用长期记忆；`FAIL` 表示微信报告主链路的关键条件不满足。
-
-### 七、启动聊天客户端
-
-在能访问 Agent 的机器上运行：
-
-```bash
-cd <PROJECT_DIR>
-export PYTHONPATH="$(pwd)/src"
-
-<PYTHON> src/client/chat_cli.py \
-  --user <USER_ID> \
-  --url http://<AGENT_HOST>:8000
-```
-
-如果只测试普通聊天、不连接 vault，可以显式使用无 vault 模式：
-
-```bash
-<PYTHON> src/client/chat_cli.py \
-  --user <USER_ID> \
-  --url http://<AGENT_HOST>:8000 \
+```powershell
+python .\src\client\chat_cli.py `
+  --user local-user `
+  --url http://127.0.0.1:8000 `
   --no-vault
 ```
 
-客户端会自动完成：
-
-- 首次生成用户 Fernet key。
-- 在本地验证模拟 Vault quote。
-- 建立安全信道并注入用户 key。
-- 获取和自动刷新 capability。
-- 创建并维护当前对话的 `session_id`。
-- 调用 Agent `/chat` 接口。
-
-首次运行后，用户密钥默认保存在：
+示例请求：
 
 ```text
-~/.config/confidential-agent-memory-vault/keys/alice.key
+帮我生成卫星互联网研究所（25级）近一周聊天内容的活动总结
+帮我生成和寻徐昨天的聊天内容的活动总结
+帮我生成今天和寻徐的聊天内容活动总结，不生成 PDF
 ```
 
-该文件是读取 `alice` 历史长期记忆所需的主密钥。不要删除、覆盖、提交到 Git
-或发送给服务器管理员。Vault 重启后，客户端会使用该文件中的同一把 key
-重新执行 provisioning。
+支持的时间表达包括：
 
-需要继续指定的对话时，可以显式设置 session：
+- 今天、昨天、前天
+- 本周、上周、近一周
+- `2026-06-07`
+- `2026-06-01 到 2026-06-07`
+- 显式 `start_time` 和 `end_time`
 
-```bash
-<PYTHON> src/client/chat_cli.py \
-  --user <USER_ID> \
-  --session <SESSION_ID> \
-  --url http://<AGENT_HOST>:8000
+## 图片与隐私策略
+
+### 图片
+
+- 不做 OCR。
+- 不调用视觉模型。
+- 不根据文件名、尺寸或 hash 猜测图片内容。
+- 只使用时间距离、消息顺序、发送者和邻近文字判断图片是否与事项相关。
+- 关联图片会被内嵌到 HTML/PDF。
+
+### 外部模型
+
+- 规范化、图片元信息提取、汇总和渲染都在本地执行。
+- 只有候选时间段中的文本会发送给 DashScope/Qwen。
+- 默认闲聊过滤会减少外发文本，但不能构成绝对隐私保证。
+- `--dry-run-llm` 可用于调用前人工审查载荷。
+- 报告内容和原始导出仍保存在本地明文目录中，应按敏感数据管理。
+
+## 环境诊断
+
+首次部署、切换网络或排查失败时运行：
+
+```powershell
+python .\src\tools\check_wechat_report_env.py `
+  --wechat-api http://127.0.0.1:10392 `
+  --contact-keyword "<CONTACT_OR_GROUP_NAME>" `
+  --output-root .\src\tools\wechatOutput `
+  --backend-output-dir "<WECHAT_BACKEND_EXPORT_DIR>"
 ```
 
-在 Python 程序中调用：
+诊断项包括：
 
-```bash
-export PYTHONPATH="$(pwd)/src"
-```
+- WeChatDataAnalysis 健康检查。
+- 联系人/群聊查询。
+- DashScope API key。
+- 报告输出目录。
+- PDF 浏览器。
+- Redis。
+- 可选 Vault socket。
 
-```python
-from client import ConfidentialAgentClient
+`WARN` 通常表示 PDF 或长期记忆等能力降级；WeChatDataAnalysis、输出目录或 DashScope 相关的 `FAIL` 会阻断主要报告流程。
 
-client = ConfidentialAgentClient(
-    user_id="<USER_ID>",
-    api_base_url="http://<AGENT_HOST>:8000",
-)
-print(client.chat("我喜欢喝粥"))
-print(client.chat("根据我的偏好推荐早餐"))
-```
+## 输出数据
 
-内网测试可以暂时使用 HTTP，但聊天内容和 bearer capability 仍可能被内网监听。
-正式部署必须使用 HTTPS。
+### `normalized_messages.jsonl`
 
-### 八、关闭项目
+规范化后的逐条消息，包含稳定消息 ID、时间、文本、链接、图片元信息、上下文分组和候选分数。
 
-按照启动顺序的反方向关闭。
+### `extracted_activities.jsonl`
 
-1. 在用户端输入 `exit` 或 `quit`，也可以按 `Ctrl+C`。
-2. 在 FastAPI Agent 终端按 `Ctrl+C`。
-3. 在 Vault 终端按 `Ctrl+C`。
-4. 停止 Redis：
-
-```bash
-docker stop camv-redis
-```
-
-查看服务器上的运行状态：
-
-```bash
-docker ps --filter name=camv-redis
-ps -ef | grep -E 'vault_server|uvicorn' | grep -v grep
-```
-
-### 九、下次重新启动
-
-不需要再次执行 `docker run`，依次执行：
-
-```bash
-docker start camv-redis
-```
-
-然后重新启动 Vault 和 FastAPI Agent。用户端仍使用原来的 `--user alice`
-命令，客户端会自动读取已保存的用户 key 并获取新的 capability。
-
-### 十、常见问题
-
-#### Redis 容器名称冲突
-
-如果出现：
+模型提取的结构化事项，主要字段包括：
 
 ```text
-container name "/camv-redis" is already in use
+title
+activity_id / thread_id
+relation_type / related_activity_id
+kind
+mandatory
+start_date / end_date / start_time
+deadline
+location
+required_action
+registration_url
+eligibility
+evidence_message_ids
+evidence_quote
+related_images
+missing_information
 ```
 
-说明 Redis 容器已经创建，使用：
+### `weekly_activity_summary.json`
 
-```bash
-docker start camv-redis
-```
-
-不要再次执行 `docker run`。
-
-#### Agent 启动时报 Redis 连接错误
-
-确认 Redis 返回 `PONG`：
-
-```bash
-docker exec camv-redis redis-cli ping
-```
-
-然后确认 Agent 使用：
-
-```bash
-export REDIS_URL="redis://127.0.0.1:6379/0"
-```
-
-#### 用户端无法连接
-
-依次检查：
-
-```bash
-curl http://服务器内网IP:8000/health
-hostname -I
-sudo ufw status
-```
-
-确认 Agent 使用 `--host 0.0.0.0`，并且防火墙只对正确的内网网段开放
-`8000`。
-
-### 十一、开发兼容 CLI
-
-`src/untrusted/chat_app.py` 仍保留为服务器本机开发入口。它不经过远程用户端封装，
-并使用旧的本地 secure session 模式：
-
-```bash
-cd <PROJECT_DIR>
-export PYTHONPATH="$(pwd)/src"
-export DASHSCOPE_API_KEY="<DASHSCOPE_API_KEY>"
-export VAULT_USER_ID="<USER_ID>"
-export USER_MEMORY_KEY="<FERNET_KEY>"
-
-<PYTHON> src/untrusted/chat_app.py
-```
-
-## 记忆管理
-
-启动 vault 后，可以用管理命令查看或遗忘当前用户的记忆：
-
-```bash
-cd <PROJECT_DIR>
-export PYTHONPATH="$(pwd)/src"
-
-<PYTHON> src/untrusted/memory_management_commands.py
-```
-
-支持命令：
+本地规则合并后的报告数据：
 
 ```text
-/memories              List active memories
-/memories all          List all memories
-/memories <status>     List active, superseded, forgotten, or expired memories
-/forgotten             List forgotten memories
-/forget <id> [id...]   Soft-delete one or more memories
-/help                  Show help
-exit | quit            Exit
+mandatory_tasks
+recommended_activities
+other_activities
+incomplete_items
+cancelled_or_updated
 ```
 
-也可以直接解密查看当前用户记忆：
+### `weekly_activity_summary.html` / `.pdf`
 
-```bash
-<PYTHON> scripts/decrypt_memories.py <USER_ID> <FERNET_KEY>
+最终可读报告。关联图片已内嵌，适合脱离原始导出目录查看和分享。
+
+## 项目结构
+
+```text
+src/tools/
+  build_wechat_activity_report.py    一键导出并生成报告
+  check_wechat_report_env.py         环境诊断
+  normalize_wechat_export.py         本地规范化
+  extract_wechat_activities.py       LLM 活动提取
+  summarize_wechat_activities.py     本地合并和分类
+  render_wechat_summary.py           HTML/PDF 渲染
+  wechat_normalizer/                 规范化、提取和渲染核心模块
+
+src/untrusted/
+  wechat_activity_report_tool.py     LangGraph 微信报告子图
+  api_server.py                      FastAPI 对话服务
+  agent_runtime.py                   对话路由和短期历史
+
+src/client/                          对话客户端和 SDK
+externalAPI/WeChatDataAnalysis/      外部微信数据工具，只读参考
+tests/                               自动化测试
 ```
 
-或：
-
-```bash
-export USER_ID="<USER_ID>"
-export USER_MEMORY_KEY="<FERNET_KEY>"
-<PYTHON> scripts/decrypt_memories.py
-```
+更细的微信处理字段和单步命令见
+[`src/tools/wechat_normalizer/README.md`](src/tools/wechat_normalizer/README.md)。
 
 ## 测试
 
-当前测试：
+微信报告主流程：
 
-```bash
-<PYTHON> tests/test_memory_lifecycle.py
-<PYTHON> tests/test_capability_security.py
-<PYTHON> tests/test_agent_service_capability.py
-<PYTHON> tests/test_client_provisioning.py
-<PYTHON> tests/test_high_level_client.py
-<PYTHON> tests/test_wechat_activity_report_tool.py
-<PYTHON> -m unittest src.tools.wechat_normalizer.tests.test_normalizer
+```powershell
+python .\tests\test_wechat_activity_report_tool.py
+python -m unittest src.tools.wechat_normalizer.tests.test_normalizer
+python -m compileall .\src\tools .\src\untrusted
 ```
 
-测试覆盖：
+完整项目还包含 Agent capability、客户端 provisioning 和记忆生命周期测试：
 
-- 新记忆写入
-- `fact_key` 合并
-- embedding 语义重复合并
-- slot 冲突替换为 `superseded`
-- 过期标记为 `expired`
-- active-only 检索
-- 访问计数更新
-- list 和 forget
-- 模拟 RA 握手和 AES-GCM key provisioning
-- session 与 user_id 绑定
-- capability 与 user_id、scope、过期时间绑定
-- 禁止不同 Fernet key 覆盖同一 user_id
-- AgentService 只使用 capability，不读取用户 key
-- Redis key/value 不保存 capability 原文
-- Client SDK -> FastAPI relay -> Vault provisioning 调用链
-- 高级客户端自动保存 key、调用 `/chat` 和刷新 capability
-- 微信活动报告工具的自然语言对象和时间范围提取
-
-## 项目文件
-
-```text
-src/
-  common/                      模拟安全信道共享代码
-  client/                      用户端 SDK 和交互式 CLI
-  interface/                   Vault 边界 API 和模拟 RA 公钥
-  trusted/                     Vault 服务、密钥管理、存储和检索
-  untrusted/                   Agent API、运行时和记忆抽取
-  tools/                       微信聊天记录规范化、活动提取、汇总和渲染
-    check_wechat_report_env.py 微信报告部署诊断脚本
-
-deployment/
-  gramine/
-    vault.manifest.template    Gramine manifest 模板
-    vault.manifest             生成产物，不提交 Git
-
-docs/
-  DESIGN.md                    架构与安全设计
-  MEMORY_SCHEMA.md             记忆数据模型
-  notes/                       问题记录
-
-scripts/
-  decrypt_memories.py          调试用解密查看脚本
-  inspect_memory_extraction.py 记忆抽取检查脚本
-  smoke_test_vault_handlers.py Vault handler 冒烟脚本
-
-tests/                         自动化测试
-vault_data/                    per-user 加密记忆文件，运行后生成
-pyproject.toml                 测试路径配置
-requirements.txt               Python 依赖
+```powershell
+python .\tests\test_agent_service_capability.py
+python .\tests\test_client_provisioning.py
+python .\tests\test_high_level_client.py
+python .\tests\test_capability_security.py
+python .\tests\test_memory_lifecycle.py
 ```
 
-## Gramine Direct 状态
+## 可选：隐私记忆 Vault
 
-当前 manifest 模板会把项目目录、Python 环境、系统库和 `/tmp` 挂载进 Gramine，并把 `DASHSCOPE_API_KEY` 作为环境变量传入。
+仓库最初还包含一个长期记忆保护研究原型。它将 per-user key、Fernet 加密存储、向量检索、生命周期管理和 Context Minimizer 放在独立 Vault 边界中，并提供模拟 remote attestation、X25519 + HKDF + AES-GCM 安全信道和 bearer capability。
 
-已支持：
+这部分能力适合研究“对话助手如何在未来 TEE/SGX 环境中保存长期用户偏好”，但不是微信聊天导出和活动报告流水线的前置条件。
 
-1. 生成 `deployment/gramine/vault.manifest`
-2. 通过 `gramine-direct deployment/gramine/vault` 启动 vault server
-3. 从 untrusted agent 侧建立模拟 RA 安全信道并访问 vault
+当前必须明确：
 
-仍需改进：
+- `gramine-direct` 只验证 Gramine 兼容性，不提供 SGX 硬件隔离。
+- 当前 quote 和 attestation 是模拟实现，不是真实 remote attestation。
+- 模拟私钥位于项目中，不能抵抗恶意宿主机。
+- DashScope embedding 和聊天模型仍可能看到发送给它们的文本。
+- 真正的 TEE 机密性仍依赖未来的 `gramine-sgx`、真实 RA/RA-TLS、sealing 和更严格的密钥管理。
 
-- 收紧 manifest 中的挂载范围。
-- 避免在生成后的 manifest 或运行环境中暴露真实 API key。
-- 明确 `vault_data/` 在 Gramine direct 和未来 SGX 模式下的挂载策略。
-- 在 SGX 硬件环境中迁移到 `gramine-sgx`。
+相关设计文档：
 
-## 安全边界和限制
+- [`docs/DESIGN.md`](docs/DESIGN.md)
+- [`docs/MEMORY_SCHEMA.md`](docs/MEMORY_SCHEMA.md)
+- [`deployment/gramine/README.md`](deployment/gramine/README.md)
 
-- `gramine-direct` 不提供 SGX 硬件隔离。
-- 当前 quote 是模拟 RA，不是真实 enclave quote。
-- 模拟 RA 私钥在项目目录中，不能抵抗恶意宿主机。
-- 当前安全信道是应用层协议原型，不等同于 RA-TLS。
-- FastAPI provisioning relay 看不到 user key，但 bearer capability 会经过 FastAPI。
-- capability_request 当前通过本地 socket 传输；恶意宿主仍可能观察或盗用 capability。
-- provisioning 尚未绑定 JWT/OAuth 等真实用户认证，恶意调用者可能抢先占用某个 user_id。
-- Vault 重启会丢失内存中的 user key，需要重新注入。
-- DashScope LLM 和 embedding 服务仍会看到发送给它们的文本。
-- 还没有真实用户认证、KMS、密钥恢复、密钥轮换和密钥吊销。
-- 多 Uvicorn worker 会各自持有 AgentService，部署前需要明确 worker 和 Redis/vault 策略。
+## 当前限制
 
-## 后续工作
+- 需要先由 WeChatDataAnalysis 解密或导入本机微信数据。
+- 活动提取依赖 DashScope/Qwen，不是完全离线流程。
+- 不读取图片文字，因此只存在于海报图片中的日期、地点和二维码不会被提取。
+- 联系人同名或群名模糊时，自动解析可能选不到目标会话。
+- PDF 依赖本机 Chrome、Edge 或 Chromium；缺失时仍可生成 HTML。
+- 对话式模式依赖 Redis；命令行报告模式不依赖 Redis 或 Vault。
+- 当前实现是面向原型和内网部署的工具，不包含完整的用户认证、权限审计和生产级数据治理。
 
-- 将模拟 RA 替换为真实 SGX remote attestation 或 RA-TLS。
-- 将用户 key 注入迁移到 attestation-based secret provisioning。
-- 评估 SGX sealing 或 Gramine encrypted files 作为本地 key 保护方案。
-- 收紧 Gramine manifest 文件挂载和环境变量暴露。
-- 设计正式的用户认证、session 绑定和授权模型。
-- 将 capability 与已认证客户端身份或 mTLS 服务身份绑定，并增加吊销机制。
-- 评估 DashScope embedding 是否符合最终威胁模型；必要时改为本地 embedding 或更严格的数据最小化。
+## 后续方向
+
+- 提供面向普通用户的报告生成界面，隐藏 `account`、`username` 和 Unix 时间戳。
+- 在导出前展示联系人候选和日期范围，减少误选会话。
+- 增加报告模板、主题样式和可编辑确认流程。
+- 支持完全本地的活动提取模型，减少聊天文本外发。
+- 增加导出文件自动清理、脱敏和访问审计。
+- 将长期记忆作为报告偏好增强项，而不是主流程依赖。
