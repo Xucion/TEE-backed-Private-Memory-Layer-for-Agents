@@ -12,10 +12,6 @@ SOURCE_ROOT = Path(__file__).resolve().parents[3]
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from tools.wechat_normalizer.llm_contract import (
-    build_extraction_payload,
-    build_weekly_summary_payload,
-)
 from tools.wechat_normalizer.activity_extractor import (
     build_group_payload,
     extract_activities_from_jsonl,
@@ -42,6 +38,7 @@ from tools.wechat_normalizer.wechat_export_api import (
     WeChatExportApiError,
     WeChatExportResult,
     WECHAT_EXPORT_TOOL_SCHEMA,
+    _automatic_export_stem,
     call_wechat_export_tool,
     extract_zip_safely,
 )
@@ -169,29 +166,6 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertGreaterEqual(structured["candidate_score"], 0.3)
         self.assertTrue(structured["action_signal"])
         self.assertTrue(structured["mandatory_signal"])
-
-    def test_llm_payload_contains_only_required_message_fields(self) -> None:
-        """验证逐条 LLM 请求包含提取所需的最小消息字段。"""
-        payload = build_extraction_payload(self.result.messages[0].to_dict())
-        self.assertIn("instruction", payload)
-        self.assertIn("output_schema", payload)
-        self.assertEqual(
-            payload["message"]["message_id"],
-            self.result.messages[0].message_id,
-        )
-        self.assertIn("llm_text", payload["message"])
-
-    def test_weekly_summary_payload_accepts_preference_memories(self) -> None:
-        """验证周报请求能够携带最小化后的用户偏好记忆。"""
-        payload = build_weekly_summary_payload(
-            [{"title": "示例比赛", "mandatory": False}],
-            week_start="2026-06-01",
-            week_end="2026-06-07",
-            preference_memories=["我关心参加开展的比赛"],
-        )
-        self.assertEqual(payload["week"]["start"], "2026-06-01")
-        self.assertEqual(payload["preference_memories"], ["我关心参加开展的比赛"])
-        self.assertIn("mandatory_tasks", payload["output_schema"])
 
     def test_media_path_traversal_is_rejected(self) -> None:
         """验证媒体解析会拒绝逃逸导出根目录的路径。"""
@@ -397,6 +371,41 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertEqual(
             [[message["message_id"] for message in payload["messages"]] for payload in payloads],
             [["day_1"], ["day_2"]],
+        )
+
+    def test_low_score_relation_message_creates_its_own_window(self) -> None:
+        """远距离补充消息即使低于普通阈值，也必须进入关系判断流程。"""
+        records = [
+            {
+                "message_id": "original",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_1",
+                "occurred_at": "2026-06-07T10:00:00+08:00",
+                "occurred_at_local": "2026-06-07T10:00:00+08:00",
+                "source_index": 1,
+                "message_type": "text",
+                "text": "请完成设备登记。",
+                "activity_features": {"candidate_score": 0.8},
+                "media": [],
+            },
+            {
+                "message_id": "correction",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_2",
+                "occurred_at": "2026-06-07T16:00:00+08:00",
+                "occurred_at_local": "2026-06-07T16:00:00+08:00",
+                "source_index": 2,
+                "message_type": "text",
+                "text": "补充一下，登记地点改为A楼。",
+                "activity_features": {"candidate_score": 0.1},
+                "media": [],
+            },
+        ]
+        payloads = list(iter_group_payloads(records))
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual(
+            [[message["message_id"] for message in payload["messages"]] for payload in payloads],
+            [["original"], ["correction"]],
         )
 
     def test_activity_response_does_not_attach_distant_group_images(self) -> None:
@@ -817,6 +826,102 @@ class WeChatNormalizerTests(unittest.TestCase):
         self.assertNotIn("topic_key", rows[0])
         self.assertNotIn("topic_key", rows[1])
 
+    def test_activity_extractor_uses_full_history_and_reconciles_relation(self) -> None:
+        """超过二十项后，远距离更正仍可关联到最早的活动线程。"""
+        class FakeResponse:
+            content = ""
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.existing_counts = []
+
+            def invoke(self, messages):
+                """记录全局历史长度，并故意把更正误报为新活动。"""
+                payload = json.loads(messages[0].content)
+                self.existing_counts.append(len(payload["existing_activities"]))
+                message = payload["messages"][0]
+                if message["message_id"] == "correction":
+                    activity = {
+                        "title": "设备登记地点调整",
+                        "kind": "announcement",
+                        "mandatory": False,
+                        "relation_type": "new",
+                        "evidence_message_ids": ["correction"],
+                        "evidence_quote": message["text"],
+                    }
+                else:
+                    activity = {
+                        "title": message["text"].removeprefix("请完成").rstrip("。"),
+                        "kind": "mandatory_task",
+                        "mandatory": True,
+                        "relation_type": "new",
+                        "evidence_message_ids": [message["message_id"]],
+                        "evidence_quote": message["text"],
+                    }
+                response = FakeResponse()
+                response.content = json.dumps(
+                    {"activities": [activity]},
+                    ensure_ascii=False,
+                )
+                return response
+
+        records = []
+        for index in range(22):
+            title = "设备登记" if index == 0 else f"事项{index}办理"
+            records.append(
+                {
+                    "message_id": f"msg_{index}",
+                    "conversation_id": "conv_1",
+                    "context_group_id": f"group_{index}",
+                    "occurred_at": f"2026-06-{index + 1:02d}T10:00:00+08:00",
+                    "occurred_at_local": f"2026-06-{index + 1:02d}T10:00:00+08:00",
+                    "source_index": index,
+                    "message_type": "text",
+                    "text": f"请完成{title}。",
+                    "activity_features": {"candidate_score": 0.8},
+                    "media": [],
+                }
+            )
+        records.append(
+            {
+                "message_id": "correction",
+                "conversation_id": "conv_1",
+                "context_group_id": "group_correction",
+                "occurred_at": "2026-06-30T16:00:00+08:00",
+                "occurred_at_local": "2026-06-30T16:00:00+08:00",
+                "source_index": 30,
+                "message_type": "text",
+                "text": "补充一下，设备登记地点改为A楼。",
+                "activity_features": {"candidate_score": 0.1},
+                "media": [],
+            }
+        )
+        model = FakeModel()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "normalized.jsonl"
+            output_path = Path(temp_dir) / "activities.jsonl"
+            input_path.write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in records)
+                + "\n",
+                encoding="utf-8",
+            )
+            count = extract_activities_from_jsonl(
+                input_path,
+                output_path,
+                chat_model=model,
+            )
+            rows = [
+                json.loads(line)
+                for line in output_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(count, 23)
+        self.assertEqual(model.existing_counts[-1], 22)
+        correction = next(row for row in rows if row["evidence_message_ids"] == ["correction"])
+        self.assertEqual(correction["thread_id"], rows[0]["thread_id"])
+        self.assertEqual(correction["related_activity_id"], rows[0]["activity_id"])
+        self.assertEqual(correction["relation_type"], "correction")
+
     def test_activity_extractor_collapses_same_evidence_parent_and_child(self) -> None:
         """同一证据的总事项与包含性子步骤只写入一条。"""
         class FakeResponse:
@@ -1030,17 +1135,34 @@ class WeChatNormalizerTests(unittest.TestCase):
                     "related_images": [],
                     "confidence": 0.7,
                 },
+                {
+                    "context_group_id": "group_4",
+                    "title": "交流活动预告",
+                    "kind": "announcement",
+                    "mandatory": False,
+                    "deadline": None,
+                    "registration_url": None,
+                    "missing_information": ["活动时间", "活动地点"],
+                    "evidence_message_ids": ["msg_4"],
+                    "related_images": [],
+                    "confidence": 0.4,
+                },
             ]
         )
-        self.assertEqual(summary["counts"]["merged_activities"], 3)
+        self.assertEqual(summary["counts"]["merged_activities"], 4)
         self.assertEqual(len(summary["mandatory_tasks"]), 2)
         self.assertEqual(len(summary["recommended_activities"]), 1)
-        self.assertEqual(len(summary["incomplete_items"]), 0)
+        self.assertEqual(len(summary["other_activities"]), 1)
+        self.assertEqual(
+            summary["other_activities"][0]["missing_information"],
+            ["活动时间", "活动地点"],
+        )
+        self.assertNotIn("incomplete_items", summary)
+        self.assertNotIn("incomplete_items", summary["counts"])
         identities = []
         for section in (
             "mandatory_tasks",
             "recommended_activities",
-            "incomplete_items",
             "other_activities",
             "cancelled_or_updated",
         ):
@@ -1083,6 +1205,25 @@ class WeChatNormalizerTests(unittest.TestCase):
         html_text = render_summary_html(summary, SAMPLE_EXPORT)
         self.assertIn("data:image/jpeg;base64,", html_text)
         self.assertIn("空调折旧费缴纳通知", html_text)
+        self.assertNotIn("<h2>信息不完整</h2>", html_text)
+
+    def test_summary_renderer_folds_legacy_incomplete_items_into_other(self) -> None:
+        """旧摘要的信息缺失栏目渲染时应兼容并入其他活动。"""
+        html_text = render_summary_html(
+            {
+                "counts": {},
+                "incomplete_items": [
+                    {
+                        "title": "缺少时间的活动",
+                        "missing_information": ["活动时间"],
+                    }
+                ],
+            },
+            SAMPLE_EXPORT,
+        )
+        self.assertIn("<h2>其他活动</h2>", html_text)
+        self.assertIn("缺少时间的活动", html_text)
+        self.assertNotIn("<h2>信息不完整</h2>", html_text)
 
     def test_pipeline_skip_extract_reuses_existing_activities(self) -> None:
         """验证 pipeline_skip_extract_reuses_existing_activities 的行为符合预期。"""
@@ -1173,7 +1314,6 @@ class WeChatNormalizerTests(unittest.TestCase):
                     usernames=["wxid_contact"],
                     start_time=1780761600,
                     end_time=1780847999,
-                    export_name="wechat_chat_xunxu_2026-06-07_json",
                     output_root=Path(temp_dir),
                     skip_extract=True,
                     make_pdf=False,
@@ -1207,6 +1347,7 @@ class WeChatNormalizerTests(unittest.TestCase):
             """提供测试用的替身实现。"""
             self.assertEqual(request.api_base, "http://127.0.0.1:10392")
             self.assertEqual(request.usernames, ["wxid_a6aq0g1v2g7f22"])
+            self.assertEqual(request.conversation_name, "寻徐")
             return WeChatExportResult(
                 export_id="export456",
                 status="done",
@@ -1222,9 +1363,9 @@ class WeChatNormalizerTests(unittest.TestCase):
                     "api_base": "http://127.0.0.1:10392",
                     "account": "wxid_3own0jvr3p9k12",
                     "usernames": ["wxid_a6aq0g1v2g7f22"],
+                    "conversation_name": "寻徐",
                     "start_time": 1780761600,
                     "end_time": 1780847999,
-                    "export_name": "wechat_chat_xunxu_2026-06-07_json",
                     "output_root": "src/tools/wechatOutput",
                 }
             )
@@ -1232,8 +1373,44 @@ class WeChatNormalizerTests(unittest.TestCase):
             export_api.export_wechat_chat = original
 
         self.assertEqual(WECHAT_EXPORT_TOOL_SCHEMA["name"], "export_wechat_chat")
+        self.assertNotIn(
+            "privacy_mode",
+            WECHAT_EXPORT_TOOL_SCHEMA["parameters"]["properties"],
+        )
+        self.assertNotIn(
+            "export_name",
+            WECHAT_EXPORT_TOOL_SCHEMA["parameters"]["properties"],
+        )
+        self.assertIn(
+            "conversation_name",
+            WECHAT_EXPORT_TOOL_SCHEMA["parameters"]["properties"],
+        )
         self.assertEqual(result["export_id"], "export456")
         self.assertEqual(result["status"], "done")
+
+    def test_export_name_uses_conversation_and_china_date(self) -> None:
+        """单日导出名称只使用会话和 UTC+8 日期。"""
+        self.assertEqual(
+            _automatic_export_stem(
+                "卫星互联网研究所（25级）",
+                ["wxid_contact"],
+                1780761600,
+                1780847999,
+            ),
+            "卫星互联网研究所（25级）_20260607",
+        )
+
+    def test_export_name_uses_date_range_for_multiple_days(self) -> None:
+        """跨日导出名称使用会话和起止日期。"""
+        self.assertEqual(
+            _automatic_export_stem(
+                "Satellite Internet Research Institute 25",
+                ["wxid_contact"],
+                1780243200,
+                1780847999,
+            ),
+            "Satellite Internet Research Institute 25_20260601_20260607",
+        )
 
 
 if __name__ == "__main__":

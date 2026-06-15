@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage
 
 
 ACTIVITY_GROUP_INSTRUCTION = """
-你负责从同一个微信聊天时间段中提取活动、通知或必须完成的任务。
+你负责从一个局部微信消息窗口中提取活动、通知或必须完成的任务。窗口只用于限制输入长度，不代表活动边界。
 规则：
 1. 只使用 messages 中明确出现的文字信息，不猜测时间、地点、报名方式或主办方。
 2. images 只表示该时间段包含图片附件；不要分析图片内容，不要根据图片文件名、尺寸、hash 或存在性推测事实。
@@ -27,8 +27,8 @@ ACTIVITY_GROUP_INSTRUCTION = """
 9. 如果原文只有日期，不要补 00:00:00；输出 YYYY-MM-DD。只有原文明确给出时刻时，才输出 ISO-8601 日期时间。
 10. 如果原文是日期范围，输出 start_date 和 end_date；不要只保留开始日期。
 11. related_images 只能表示同时间段附件，不得作为 title、deadline、location、required_action、mandatory 的证据。
-12. 先判断每条消息是新事项、补充、更正、催办还是普通讨论；不要把同一事项的补充消息拆成多个活动。
-13. existing_activities 是之前已经抽取的事项。只有当前消息明确补充、催办、更正或取消其中一项时，才填写 related_activity_id；禁止根据某个领域名称自行创建或复用主题键。
+12. 先判断每条消息是新事项、补充、更正、催办还是普通讨论；即使消息与原通知相隔数小时或数天，也不要把同一事项的补充消息拆成新活动。
+13. existing_activities 是当前会话报告范围内之前已经抽取的全部事项。当前消息明确补充、催办、更正或取消其中一项时，填写 related_activity_id；禁止根据某个领域名称自行创建或复用主题键。
 14. 同一条证据中的总事项和子步骤应合并成一个活动，不要分别输出。
 15. 输出严格 JSON，不输出 Markdown。
 
@@ -108,6 +108,16 @@ MEDIA_REFERENCE_RE = re.compile(
     r"(见(?:上|下)?图|如图|如下|上面|下面|刚才|刚发|附件|图片|截图|"
     r"二维码|扫码|海报|文件|文档|表格)"
 )
+RELATION_MESSAGE_RE = re.compile(
+    r"(补充|更正|改为|改成|调整为|变更为|延期|推迟|取消|作废|更新|"
+    r"前述|上述|刚才|之前|前面|原定|仍按|仍然|另行|"
+    r"时间.{0,8}(?:改|调整|变更)|地点.{0,8}(?:改|调整|变更)|"
+    r"截止.{0,8}(?:延长|调整|变更))"
+)
+RELATION_TEXT_NOISE_RE = re.compile(
+    r"(补充|更正|改为|改成|调整为|变更为|延期|推迟|取消|作废|更新|"
+    r"前述|上述|刚才|之前|前面|原定|仍按|仍然|另行|一下|通知|事项)"
+)
 OPTIONAL_EXPRESSION_RE = re.compile(
     r"(?:欢迎|自愿|有意|感兴趣|愿意|想要|希望).{0,12}(?:参加|报名|填写|领取|加入)"
     r"|(?:可|可以|如有需要).{0,8}(?:自行)?(?:参加|报名|填写|选择|领取|加入)"
@@ -173,7 +183,11 @@ def iter_group_payloads(
             index
             for index, record in enumerate(ordered)
             if _message_text(record)
-            and (include_all or _candidate_score(record) >= minimum_candidate_score)
+            and (
+                include_all
+                or _candidate_score(record) >= minimum_candidate_score
+                or _is_relation_candidate(record)
+            )
         ]
         ranges = [
             _context_window_range(
@@ -351,6 +365,14 @@ def build_group_payload(
         "instruction": ACTIVITY_GROUP_INSTRUCTION,
         "output_schema": ACTIVITY_GROUP_SCHEMA,
         "context_group_id": context_group_id,
+        "conversation_id": next(
+            (
+                str(record.get("conversation_id"))
+                for record in records
+                if record.get("conversation_id")
+            ),
+            None,
+        ),
         "source_context_group_ids": source_context_group_ids,
         "messages": messages,
         "images": images,
@@ -387,24 +409,29 @@ def extract_activities_from_jsonl(
 
     llm = chat_model or _build_chat_model(model_name)
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-    written = 0
     known_activities: dict[str, dict[str, Any]] = {}
+    extracted: list[dict[str, Any]] = []
+    for payload in payloads:
+        model_payload = {
+            **payload,
+            "existing_activities": _global_activity_context(
+                known_activities,
+                conversation_id=payload.get("conversation_id"),
+            ),
+        }
+        response_text = _invoke_llm(llm, model_payload)
+        data = _parse_llm_json(response_text)
+        normalized = normalize_activity_response(data, model_payload)
+        normalized = _collapse_same_evidence_activities(normalized)
+        normalized = _assign_activity_threads(normalized, known_activities)
+        extracted.extend(normalized)
+
+    reconciled = _reconcile_activity_threads(extracted)
     with output_jsonl.open("w", encoding="utf-8", newline="\n") as handle:
-        for payload in payloads:
-            model_payload = {
-                **payload,
-                "existing_activities": _recent_activity_context(known_activities),
-            }
-            response_text = _invoke_llm(llm, model_payload)
-            data = _parse_llm_json(response_text)
-            normalized = normalize_activity_response(data, model_payload)
-            normalized = _collapse_same_evidence_activities(normalized)
-            normalized = _assign_activity_threads(normalized, known_activities)
-            for activity in normalized:
-                handle.write(json.dumps(activity, ensure_ascii=False, sort_keys=True))
-                handle.write("\n")
-                written += 1
-    return written
+        for activity in reconciled:
+            handle.write(json.dumps(activity, ensure_ascii=False, sort_keys=True))
+            handle.write("\n")
+    return len(reconciled)
 
 
 def normalize_activity_response(
@@ -510,6 +537,7 @@ def normalize_activity_response(
             {
                 "schema_version": "wechat-extracted-activity/v1",
                 "context_group_id": payload["context_group_id"],
+                "conversation_id": payload.get("conversation_id"),
                 "source_context_group_ids": list(
                     payload.get("source_context_group_ids", [])
                 ),
@@ -547,16 +575,18 @@ def normalize_activity_response(
     return normalized
 
 
-def _recent_activity_context(
+def _global_activity_context(
     known_activities: dict[str, dict[str, Any]],
     *,
-    limit: int = 20,
+    conversation_id: Any = None,
 ) -> list[dict[str, Any]]:
-    """提供最近事项的最小结构，供模型判断补充关系。"""
-    values = list(known_activities.values())[-limit:]
+    """提供同一会话报告范围内全部既有事项，供模型判断跨窗口关系。"""
+    target_conversation_id = _optional_string(conversation_id)
     return [
         {
             "activity_id": activity["activity_id"],
+            "thread_id": activity.get("thread_id"),
+            "conversation_id": activity.get("conversation_id"),
             "title": activity.get("title"),
             "summary": activity.get("summary"),
             "required_action": activity.get("required_action"),
@@ -564,7 +594,10 @@ def _recent_activity_context(
             "location": activity.get("location"),
             "evidence_quote": activity.get("evidence_quote"),
         }
-        for activity in values
+        for activity in known_activities.values()
+        if not target_conversation_id
+        or not _optional_string(activity.get("conversation_id"))
+        or _optional_string(activity.get("conversation_id")) == target_conversation_id
     ]
 
 
@@ -579,6 +612,14 @@ def _assign_activity_threads(
         relation_type = activity.get("relation_type") or "new"
         related_activity_id = activity.get("related_activity_id")
         related = known_activities.get(str(related_activity_id or ""))
+        if related is None and (
+            relation_type != "new" or _activity_has_relation_signal(activity)
+        ):
+            related = _best_related_activity(activity, known_activities.values())
+            related_activity_id = related.get("activity_id") if related else None
+            if related is not None and relation_type == "new":
+                relation_type = _relation_type_from_activity(activity)
+                _apply_inferred_update_type(activity, relation_type)
         if relation_type != "new" and related is not None:
             thread_id = str(related.get("thread_id") or related["activity_id"])
         else:
@@ -593,6 +634,180 @@ def _assign_activity_threads(
         known_activities[activity_id] = activity
         assigned.append(activity)
     return assigned
+
+
+def _reconcile_activity_threads(
+    activities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """在全部窗口提取完成后校正跨窗口的补充、更正和提醒关系。"""
+    by_id = {
+        str(activity.get("activity_id")): activity
+        for activity in activities
+        if activity.get("activity_id")
+    }
+    previous: list[dict[str, Any]] = []
+    for activity in activities:
+        relation_type = str(activity.get("relation_type") or "new")
+        related = by_id.get(str(activity.get("related_activity_id") or ""))
+        if related is None and (
+            relation_type != "new" or _activity_has_relation_signal(activity)
+        ):
+            related = _best_related_activity(activity, previous)
+        if related is not None and related is not activity:
+            activity["related_activity_id"] = related.get("activity_id")
+            activity["thread_id"] = related.get("thread_id") or related.get("activity_id")
+            if relation_type == "new":
+                inferred_relation = _relation_type_from_activity(activity)
+                activity["relation_type"] = inferred_relation
+                _apply_inferred_update_type(activity, inferred_relation)
+        previous.append(activity)
+
+    thread_by_activity_id = {
+        str(activity.get("activity_id")): str(
+            activity.get("thread_id") or activity.get("activity_id")
+        )
+        for activity in activities
+        if activity.get("activity_id")
+    }
+    for activity in activities:
+        thread_id = str(activity.get("thread_id") or activity.get("activity_id") or "")
+        seen = set()
+        while thread_id in thread_by_activity_id and thread_id not in seen:
+            seen.add(thread_id)
+            parent = thread_by_activity_id[thread_id]
+            if parent == thread_id:
+                break
+            thread_id = parent
+        if thread_id:
+            activity["thread_id"] = thread_id
+    return activities
+
+
+def _best_related_activity(
+    activity: dict[str, Any],
+    candidates: Iterable[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """从整个报告历史中选择证据最充分的关联事项。"""
+    candidate_list = [
+        candidate
+        for candidate in candidates
+        if candidate is not activity
+        and _same_conversation(activity, candidate)
+        and candidate.get("activity_id")
+    ]
+    if not candidate_list:
+        return None
+    if len(candidate_list) == 1:
+        return candidate_list[0]
+
+    scored = [
+        (_activity_relation_score(activity, candidate), candidate)
+        for candidate in candidate_list
+    ]
+    score, best = max(
+        scored,
+        key=lambda item: (
+            item[0],
+            str(item[1].get("activity_id") or ""),
+        ),
+    )
+    return best if score >= 0.3 else None
+
+
+def _same_conversation(
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> bool:
+    """避免把不同会话中的省略式补充错误关联。"""
+    left_id = _optional_string(left.get("conversation_id"))
+    right_id = _optional_string(right.get("conversation_id"))
+    return not left_id or not right_id or left_id == right_id
+
+
+def _activity_relation_score(
+    fragment: dict[str, Any],
+    candidate: dict[str, Any],
+) -> float:
+    """使用链接、标题提及和通用文本重合度评估活动关系。"""
+    fragment_url = _optional_string(fragment.get("registration_url"))
+    candidate_url = _optional_string(candidate.get("registration_url"))
+    if fragment_url and fragment_url == candidate_url:
+        return 1.0
+
+    fragment_text = _activity_relation_text(fragment)
+    candidate_title = _relation_key(candidate.get("title"))
+    if candidate_title and len(candidate_title) >= 4 and candidate_title in fragment_text:
+        return 0.9
+
+    candidate_text = _activity_relation_text(candidate)
+    left_terms = _character_ngrams(fragment_text)
+    right_terms = _character_ngrams(candidate_text)
+    if not left_terms or not right_terms:
+        return 0.0
+    return len(left_terms & right_terms) / min(len(left_terms), len(right_terms))
+
+
+def _activity_relation_text(activity: dict[str, Any]) -> str:
+    """生成保留事项对象、移除关系套话的关联文本。"""
+    values = [
+        activity.get("title"),
+        activity.get("summary"),
+        activity.get("required_action"),
+        activity.get("evidence_quote"),
+    ]
+    return _relation_key(" ".join(str(value) for value in values if value))
+
+
+def _activity_raw_text(activity: dict[str, Any]) -> str:
+    """生成保留关系表达的活动文本。"""
+    values = [
+        activity.get("title"),
+        activity.get("summary"),
+        activity.get("required_action"),
+        activity.get("evidence_quote"),
+    ]
+    return " ".join(str(value) for value in values if value)
+
+
+def _relation_key(value: Any) -> str:
+    """规范化活动关系比较文本，不使用领域专有过滤词。"""
+    text = str(value or "").lower()
+    text = re.sub(r"https?://\S+", "", text)
+    text = RELATION_TEXT_NOISE_RE.sub("", text)
+    text = re.sub(r"\d+(?:[./:\-]\d+)*", "", text)
+    return re.sub(r"[^\w\u4e00-\u9fff]", "", text)
+
+
+def _activity_has_relation_signal(activity: dict[str, Any]) -> bool:
+    """判断提取片段是否包含补充、更正等通用关系表达。"""
+    return bool(RELATION_MESSAGE_RE.search(_activity_raw_text(activity)))
+
+
+def _relation_type_from_activity(activity: dict[str, Any]) -> str:
+    """从通用关系表达推断关系类型。"""
+    text = _activity_raw_text(activity)
+    if re.search(r"(取消|作废)", text):
+        return "cancelled"
+    if re.search(r"(延期|推迟|截止.{0,8}延长)", text):
+        return "postponed"
+    if re.search(r"(更正|改为|改成|调整为|变更为)", text):
+        return "correction"
+    if re.search(r"(提醒|催办|仍按|仍然)", text):
+        return "reminder"
+    return "supplement"
+
+
+def _apply_inferred_update_type(
+    activity: dict[str, Any],
+    relation_type: str,
+) -> None:
+    """把明确的关系类型同步到更新状态。"""
+    if activity.get("update_type") in (None, "", "new") and relation_type in {
+        "correction",
+        "postponed",
+        "cancelled",
+    }:
+        activity["update_type"] = relation_type
 
 
 def _activity_id(activity: dict[str, Any]) -> str:
@@ -918,6 +1133,14 @@ def _candidate_score(record: dict[str, Any]) -> float:
         return float(record.get("activity_features", {}).get("candidate_score", 0.0))
     except (TypeError, ValueError):
         return 0.0
+
+
+def _is_relation_candidate(record: dict[str, Any]) -> bool:
+    """兼容旧规范化文件，并召回低分的补充、更正或取消消息。"""
+    features = record.get("activity_features", {})
+    if isinstance(features, dict) and features.get("relation_signal") is True:
+        return True
+    return bool(RELATION_MESSAGE_RE.search(_message_text(record)))
 
 
 def _message_text(record: dict[str, Any]) -> str:

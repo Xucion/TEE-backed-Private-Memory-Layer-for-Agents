@@ -30,11 +30,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional normalization report path.",
     )
     parser.add_argument(
-        "--timezone-offset",
-        default="+08:00",
-        help="Local timezone offset used for display timestamps (default: +08:00).",
-    )
-    parser.add_argument(
         "--user-memory",
         action="append",
         default=[],
@@ -60,7 +55,6 @@ def main() -> None:
 
     result = normalize_export(
         input_path,
-        timezone_offset=args.timezone_offset,
         preference_profile=preference_profile,
     )
     write_result(result, output_path, args.report)

@@ -64,22 +64,11 @@ def build_activity_summary(
         for activity in optional
         if _activity_identity(activity) not in recommended_ids
     ]
-    incomplete_items = [
-        activity
-        for activity in optional_remaining
-        if activity.get("missing_information")
-    ]
-    incomplete_ids = {_activity_identity(activity) for activity in incomplete_items}
-    other_activities = [
-        activity
-        for activity in optional_remaining
-        if _activity_identity(activity) not in incomplete_ids
-    ]
+    other_activities = optional_remaining
 
     mandatory_tasks = sorted(mandatory_tasks, key=_sort_key)
     recommended_activities = sorted(recommended_activities, key=_sort_key)
     other_activities = sorted(other_activities, key=_sort_key)
-    incomplete_items = sorted(incomplete_items, key=_sort_key)
     cancelled_or_updated = sorted(cancelled_or_updated, key=_sort_key)
 
     return {
@@ -91,13 +80,11 @@ def build_activity_summary(
             "mandatory_tasks": len(mandatory_tasks),
             "recommended_activities": len(recommended_activities),
             "other_activities": len(other_activities),
-            "incomplete_items": len(incomplete_items),
             "cancelled_or_updated": len(cancelled_or_updated),
         },
         "mandatory_tasks": mandatory_tasks,
         "recommended_activities": recommended_activities,
         "other_activities": other_activities,
-        "incomplete_items": incomplete_items,
         "cancelled_or_updated": cancelled_or_updated,
     }
 

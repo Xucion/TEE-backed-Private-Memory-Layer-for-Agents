@@ -52,12 +52,12 @@ def render_summary_files(
 def render_summary_html(summary: dict[str, Any], export_root: Path) -> str:
     """渲染活动汇总、html。"""
     counts = summary.get("counts", {})
+    other_activities = _combined_other_activities(summary)
     sections = [
-        ("必须完成", "mandatory_tasks", "必须"),
-        ("推荐关注", "recommended_activities", "可选"),
-        ("信息不完整", "incomplete_items", "待确认"),
-        ("其他活动", "other_activities", "其他"),
-        ("更正/延期/取消", "cancelled_or_updated", "更新"),
+        ("必须完成", summary.get("mandatory_tasks", []), "必须"),
+        ("推荐关注", summary.get("recommended_activities", []), "可选"),
+        ("其他活动", other_activities, "其他"),
+        ("更正/延期/取消", summary.get("cancelled_or_updated", []), "更新"),
     ]
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     body = [
@@ -78,18 +78,22 @@ def render_summary_html(summary: dict[str, Any], export_root: Path) -> str:
         '<section class="overview">',
         _stat("必须完成", counts.get("mandatory_tasks", 0)),
         _stat("推荐关注", counts.get("recommended_activities", 0)),
-        _stat("信息不完整", counts.get("incomplete_items", 0)),
-        _stat("其他", counts.get("other_activities", 0)),
+        _stat("其他", len(other_activities)),
         "</section>",
     ]
 
-    for title, key, badge in sections:
-        items = summary.get(key, [])
+    for title, items, badge in sections:
         if not items:
             continue
+        section_key = {
+            "必须完成": "mandatory_tasks",
+            "推荐关注": "recommended_activities",
+            "其他活动": "other_activities",
+            "更正/延期/取消": "cancelled_or_updated",
+        }[title]
         body.extend(
             [
-                f'<section class="section section-{html.escape(key)}">',
+                f'<section class="section section-{html.escape(section_key)}">',
                 f"<h2>{html.escape(title)}</h2>",
             ]
         )
@@ -106,6 +110,25 @@ def render_summary_html(summary: dict[str, Any], export_root: Path) -> str:
         ]
     )
     return "\n".join(body)
+
+
+def _combined_other_activities(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """把旧摘要中的信息缺失栏目兼容性并入其他活动。"""
+    combined = []
+    seen = set()
+    for key in ("other_activities", "incomplete_items"):
+        values = summary.get(key, [])
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            marker = json.dumps(item, ensure_ascii=False, sort_keys=True)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            combined.append(item)
+    return combined
 
 
 def render_pdf_with_browser(html_path: Path, pdf_path: Path) -> bool:
@@ -347,7 +370,6 @@ h1 { margin: 0; font-size: 30px; line-height: 1.2; }
 .section { margin: 24px 0; }
 h2 { font-size: 20px; margin: 0 0 12px; }
 .item { background: #fff; border: 1px solid #d8dee8; border-left: 5px solid #1f6feb; border-radius: 8px; padding: 16px; margin: 12px 0; break-inside: avoid; }
-.section-incomplete_items .item { border-left-color: #b7791f; }
 .section-recommended_activities .item { border-left-color: #2f855a; }
 .item-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
 h3 { font-size: 18px; margin: 0 0 8px; }

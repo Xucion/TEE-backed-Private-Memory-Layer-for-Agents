@@ -80,10 +80,10 @@ python -m pip install -r requirements.txt
 $env:DASHSCOPE_API_KEY="<YOUR_DASHSCOPE_API_KEY>"
 ```
 
-可选指定模型，默认是 `qwen-turbo`：
+可选指定模型，默认是 `qwen-max`：
 
 ```powershell
-$env:TONGYI_MODEL="qwen-turbo"
+$env:TONGYI_MODEL="qwen-max"
 ```
 
 ### 2. 启动微信数据服务
@@ -128,9 +128,10 @@ python .\src\tools\build_wechat_activity_report.py `
   --username "<CONVERSATION_USERNAME>" `
   --start-time <START_UNIX_SECONDS> `
   --end-time <END_UNIX_SECONDS> `
-  --export-name "wechat_report_2026-06-01_2026-06-07" `
   --output-root .\src\tools\wechatOutput
 ```
+
+通过对话生成报告时，导出目录和 ZIP 名称只由群聊或联系人的展示名称与 UTC+8 下的日期自动生成，例如 `卫星互联网研究所（25级）_20260609_20260615`。无法取得展示名称时才回退到 username。
 
 该命令会依次完成：
 
@@ -151,12 +152,6 @@ python .\src\tools\build_wechat_activity_report.py `
 
 ```powershell
 --no-media
-```
-
-需要启用 WeChatDataAnalysis 自身提供的隐私导出模式时：
-
-```powershell
---privacy-mode
 ```
 
 ## 从已有导出生成

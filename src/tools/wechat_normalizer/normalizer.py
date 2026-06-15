@@ -52,52 +52,9 @@ SENSITIVE_QUERY_KEYS = {
     "token",
 }
 
-ACTIVITY_KEYWORDS = {
-    "competition": ("比赛", "竞赛", "大赛", "赛题", "挑战杯", "获奖"),
-    "entertainment": ("娱乐", "文艺", "音乐", "电影", "演出", "联谊", "聚会", "游戏"),
-    "sports": ("体育", "运动会", "篮球", "足球", "羽毛球", "乒乓球"),
-    "academic": ("讲座", "学术", "论坛", "研讨", "论文", "课题", "报告会"),
-    "career": ("招聘", "实习", "就业", "宣讲"),
-    "volunteer": ("志愿", "公益"),
-    "administrative": ("缴费", "材料", "表格", "登记", "统计", "名单"),
-}
-
-MANDATORY_KEYWORDS = (
-    "必须",
-    "务必",
-    "要求",
-    "请于",
-    "截止",
-    "提交",
-    "填写",
-    "完成",
-    "不得",
-    "统一参加",
-    "全体同学",
-)
-
-DATE_KEYWORDS = (
-    "截止",
-    "报名",
-    "时间",
-    "日期",
-    "本周",
-    "下周",
-    "今天",
-    "明天",
-    "周一",
-    "周二",
-    "周三",
-    "周四",
-    "周五",
-    "周六",
-    "周日",
-)
-
 CONTEXT_GROUP_GAP_SECONDS = 5 * 60
+CHINA_TIMEZONE = timezone(timedelta(hours=8))
 
-# Override mojibake literals above. These strings drive activity detection and
-# must remain readable UTF-8 because exported WeChat content is Chinese text.
 ACTIVITY_KEYWORDS = {
     "competition": ("比赛", "竞赛", "大赛", "赛题", "挑战杯", "获奖"),
     "entertainment": ("娱乐", "文艺", "音乐", "电影", "演出", "联谊", "聚会", "游戏"),
@@ -107,20 +64,6 @@ ACTIVITY_KEYWORDS = {
     "volunteer": ("志愿", "公益"),
     "administrative": ("缴费", "材料", "表格", "登记", "统计", "名单", "报销", "审核"),
 }
-
-MANDATORY_KEYWORDS = (
-    "必须",
-    "务必",
-    "要求",
-    "请于",
-    "截止",
-    "提交",
-    "填写",
-    "完成",
-    "不得",
-    "统一参加",
-    "全体同学",
-)
 
 DATE_KEYWORDS = (
     "截止",
@@ -156,6 +99,12 @@ GENERIC_DIRECTIVE_RE = re.compile(
     r"(?:提交|填写|完成|办理|缴纳|确认|反馈|参加|报名)|"
     r"需要.{0,16}(?:提交|填写|完成|办理|缴纳|确认|反馈|参加|报名))"
 )
+GENERIC_RELATION_RE = re.compile(
+    r"(补充|更正|改为|改成|调整为|变更为|延期|推迟|取消|作废|更新|"
+    r"前述|上述|刚才|之前|前面|原定|仍按|仍然|另行|"
+    r"时间.{0,8}(?:改|调整|变更)|地点.{0,8}(?:改|调整|变更)|"
+    r"截止.{0,8}(?:延长|调整|变更))"
+)
 
 
 @dataclass
@@ -167,12 +116,11 @@ class NormalizationResult:
 def normalize_export(
     export_dir: Path,
     *,
-    timezone_offset: str = "+08:00",
     preference_profile: PreferenceProfile | None = None,
 ) -> NormalizationResult:
     """读取微信导出目录并生成稳定排序后的规范化消息集合。"""
     export_root = export_dir.resolve()
-    local_timezone = _parse_timezone_offset(timezone_offset)
+    local_timezone = CHINA_TIMEZONE
     report = NormalizationReport(schema_version="wechat-normalization-report/v1")
 
     _validate_export(export_root, report)
@@ -555,91 +503,6 @@ def _activity_features(
     message_type: str,
     has_media: bool,
 ) -> dict[str, Any]:
-    """根据关键词、日期和媒体信号计算活动候选特征。"""
-    normalized = text.lower()
-    tags = sorted(
-        tag
-        for tag, keywords in ACTIVITY_KEYWORDS.items()
-        if any(keyword.lower() in normalized for keyword in keywords)
-    )
-    mandatory = any(keyword in text for keyword in MANDATORY_KEYWORDS)
-    has_date_signal = any(keyword in text for keyword in DATE_KEYWORDS) or bool(
-        re.search(r"\d{1,2}\s*[月./-]\s*\d{1,2}\s*[日号]?", text)
-    )
-
-    score = 0.0
-    if tags:
-        score += min(0.5, 0.22 + 0.1 * len(tags))
-    if mandatory:
-        score += 0.3
-    if has_date_signal:
-        score += 0.2
-    if message_type == "link":
-        score += 0.08
-    if has_media:
-        score += 0.05
-
-    return {
-        "candidate_score": round(min(1.0, score), 3),
-        "is_activity_candidate": score >= 0.3,
-        "tags": tags,
-        "mandatory_signal": mandatory,
-        "date_signal": has_date_signal,
-    }
-
-
-def _build_llm_text(
-    *,
-    message_type: str,
-    occurred_at_local: str | None,
-    observed_at_local: str | None,
-    title: str | None,
-    text: str | None,
-    url: str | None,
-    url_host: str | None,
-    media: list,
-) -> str:
-    """把规范化字段组合为供 LLM 逐条提取的紧凑文本。"""
-    lines = [
-        f"消息类型: {message_type}",
-        f"原始时间: {occurred_at_local or 'unknown'}",
-    ]
-    if observed_at_local and observed_at_local != occurred_at_local:
-        lines.append(f"当前会话收到时间: {observed_at_local}")
-    if title:
-        lines.append(f"标题: {title}")
-    if text:
-        lines.append(f"正文: {text}")
-    if url:
-        lines.append(f"链接: {url}")
-    elif url_host:
-        lines.append(f"链接域名: {url_host}")
-
-    for index, attachment in enumerate(media, start=1):
-        description = [
-            f"媒体{index}",
-            attachment.kind,
-            attachment.parser_hint or "unknown",
-            attachment.analysis_status,
-        ]
-        lines.append("媒体: " + " | ".join(description))
-        if attachment.analysis_status == "not_analyzed":
-            lines.append(
-                "媒体内容: [不分析图片内容，请结合同一 context_group_id "
-                "内的相邻文本理解]"
-            )
-        elif attachment.analysis_status == "missing":
-            lines.append("媒体提取文本: [导出中缺少该媒体]")
-        elif attachment.analysis_status == "failed":
-            lines.append("媒体提取文本: [媒体解析失败，需人工检查]")
-    return "\n".join(lines)
-
-
-def _activity_features(
-    text: str,
-    message_type: str,
-    has_media: bool,
-) -> dict[str, Any]:
     """使用通用语言结构计算候选分数，领域词只用于弱分类。"""
     normalized = text.lower()
     tags = sorted(
@@ -654,6 +517,7 @@ def _activity_features(
     has_action_signal = bool(GENERIC_ACTION_RE.search(text))
     has_event_signal = bool(GENERIC_EVENT_RE.search(text))
     has_audience_signal = bool(GENERIC_AUDIENCE_RE.search(text))
+    has_relation_signal = bool(GENERIC_RELATION_RE.search(text))
 
     score = 0.0
     if tags:
@@ -668,6 +532,8 @@ def _activity_features(
         score += 0.2
     if has_audience_signal:
         score += 0.12
+    if has_relation_signal:
+        score += 0.25
     if message_type == "link":
         score += 0.08
     if has_media:
@@ -682,6 +548,7 @@ def _activity_features(
         "action_signal": has_action_signal,
         "event_signal": has_event_signal,
         "audience_signal": has_audience_signal,
+        "relation_signal": has_relation_signal,
     }
 
 
@@ -911,19 +778,6 @@ def _format_time(
         utc_time.isoformat().replace("+00:00", "Z"),
         local_time.isoformat(),
     )
-
-
-def _parse_timezone_offset(value: str) -> timezone:
-    """将正负时区偏移字符串解析为 timezone 对象。"""
-    match = re.fullmatch(r"([+-])(\d{2}):(\d{2})", value)
-    if not match:
-        raise ValueError("timezone offset must use format +HH:MM or -HH:MM")
-    sign = 1 if match.group(1) == "+" else -1
-    hours = int(match.group(2))
-    minutes = int(match.group(3))
-    if hours > 23 or minutes > 59:
-        raise ValueError("invalid timezone offset")
-    return timezone(sign * timedelta(hours=hours, minutes=minutes))
 
 
 def _load_json_object(path: Path) -> dict[str, Any]:

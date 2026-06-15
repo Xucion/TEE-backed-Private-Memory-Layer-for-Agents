@@ -42,7 +42,6 @@ class WeChatActivityReportToolCall:
     display_name: str
     start_time: int
     end_time: int
-    export_name: str
     output_root: Path
     backend_output_dir: str | None
     skip_extract: bool
@@ -64,8 +63,6 @@ class WeChatReportGraphState(TypedDict, total=False):
     target_name: str
     start_time: int
     end_time: int
-    range_label: str
-    export_name: str
     output_root: Path
     backend_output_dir: str | None
     skip_extract: bool
@@ -256,9 +253,9 @@ def _parse_request_node(state: WeChatReportGraphState) -> dict[str, Any]:
         or os.getenv("WECHAT_EXPORT_BACKEND_OUTPUT_DIR")
     )
 
-    start_time, end_time, range_label = _extract_time_range(text)
+    start_time, end_time, _ = _extract_time_range(text)
     if start_time is None or end_time is None:
-        start_time, end_time, range_label = _extract_time_range(context_text)
+        start_time, end_time, _ = _extract_time_range(context_text)
     if start_time is None or end_time is None:
         return {
             "error": "要生成微信活动报告，还需要时间范围，例如：一周、本周、上周，或 2026-06-07。",
@@ -273,10 +270,6 @@ def _parse_request_node(state: WeChatReportGraphState) -> dict[str, Any]:
         return {"error": reply, "reply": reply}
 
     display_name = target_name or username or ""
-    export_name = (
-        _extract_named_value(text, "export_name", "export-name", "导出名")
-        or f"wechat_chat_{_safe_export_part(display_name)}_{range_label}"
-    )
 
     return {
         "api_base": api_base,
@@ -286,8 +279,6 @@ def _parse_request_node(state: WeChatReportGraphState) -> dict[str, Any]:
         "target_name": target_name or "",
         "start_time": int(start_time),
         "end_time": int(end_time),
-        "range_label": range_label,
-        "export_name": export_name,
         "output_root": output_root,
         "backend_output_dir": backend_output_dir,
         "skip_extract": _has_any(text, "skip-extract", "跳过提取", "复用已有", "不调用大模型"),
@@ -327,8 +318,10 @@ def _build_report_node(state: WeChatReportGraphState) -> dict[str, Any]:
             usernames=[str(state["username"])],
             start_time=int(state["start_time"]),
             end_time=int(state["end_time"]),
-            export_name=str(state["export_name"]),
             output_root=state["output_root"],
+            conversation_name=str(
+                state.get("display_name") or state["username"]
+            ),
             backend_output_dir=state.get("backend_output_dir"),
             skip_extract=bool(state.get("skip_extract", False)),
             dry_run_llm=bool(state.get("dry_run_llm", False)),
@@ -654,13 +647,6 @@ def _format_range(start_time: int, end_time: int) -> str:
 def _normalize_name(value: str) -> str:
     """规范化名称。"""
     return re.sub(r"\s+", "", str(value or "").strip()).lower()
-
-
-def _safe_export_part(value: str) -> str:
-    """生成适合文件名使用的导出名称片段。"""
-    text = str(value or "").strip()
-    text = re.sub(r'[<>:"/\\|?*\x00-\x1f\s]+', "_", text)
-    return text.strip("_") or "wechat_chat"
 
 
 def _has_any(text: str, *needles: str) -> bool:

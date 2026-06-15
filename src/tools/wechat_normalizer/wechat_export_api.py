@@ -7,11 +7,13 @@ import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
 DEFAULT_MEDIA_KINDS = ["image", "emoji", "video", "video_thumb", "voice", "file"]
+CHINA_TIMEZONE = timezone(timedelta(hours=8))
 TERMINAL_STATUSES = {"done", "error", "cancelled"}
 WECHAT_EXPORT_TOOL_NAME = "export_wechat_chat"
 WECHAT_EXPORT_TOOL_SCHEMA: dict[str, Any] = {
@@ -33,6 +35,10 @@ WECHAT_EXPORT_TOOL_SCHEMA: dict[str, Any] = {
                 "items": {"type": "string"},
                 "description": "Conversation usernames to export.",
             },
+            "conversation_name": {
+                "type": ["string", "null"],
+                "description": "Resolved display name used for the automatic export file name.",
+            },
             "start_time": {
                 "type": ["integer", "null"],
                 "description": "Inclusive Unix seconds start time.",
@@ -40,10 +46,6 @@ WECHAT_EXPORT_TOOL_SCHEMA: dict[str, Any] = {
             "end_time": {
                 "type": ["integer", "null"],
                 "description": "Inclusive Unix seconds end time.",
-            },
-            "export_name": {
-                "type": ["string", "null"],
-                "description": "Output export name; .zip suffix is optional.",
             },
             "output_root": {
                 "type": "string",
@@ -56,10 +58,6 @@ WECHAT_EXPORT_TOOL_SCHEMA: dict[str, Any] = {
             "include_media": {
                 "type": "boolean",
                 "description": "Whether to ask WeChatDataAnalysis to package media files.",
-            },
-            "privacy_mode": {
-                "type": "boolean",
-                "description": "Whether to enable WeChatDataAnalysis privacy_mode.",
             },
         },
         "required": ["api_base", "usernames", "output_root"],
@@ -76,14 +74,13 @@ class WeChatExportRequest:
     api_base: str
     account: str | None
     usernames: list[str]
+    conversation_name: str | None = None
     start_time: int | None = None
     end_time: int | None = None
-    export_name: str | None = None
     output_root: Path = Path("src/tools/wechatOutput")
     backend_output_dir: str | None = None
     include_media: bool = True
     media_kinds: list[str] | None = None
-    privacy_mode: bool = False
     scope: str = "selected"
     export_format: str = "json"
     timeout_seconds: int = 600
@@ -137,8 +134,7 @@ class WeChatExportApiClient:
         include_media: bool,
         media_kinds: Iterable[str],
         backend_output_dir: str | None,
-        privacy_mode: bool,
-        export_name: str | None,
+        file_name: str,
     ) -> dict[str, Any]:
         """创建微信导出任务、job。"""
         payload = {
@@ -151,8 +147,7 @@ class WeChatExportApiClient:
             "include_media": bool(include_media),
             "media_kinds": list(media_kinds),
             "output_dir": str(backend_output_dir).strip() if backend_output_dir else None,
-            "privacy_mode": bool(privacy_mode),
-            "file_name": _zip_file_name(export_name) if export_name else None,
+            "file_name": file_name,
         }
         if payload["scope"] == "selected" and not payload["usernames"]:
             raise ValueError("At least one username is required for selected export.")
@@ -249,6 +244,12 @@ class WeChatExportApiClient:
 def export_wechat_chat(request: WeChatExportRequest) -> WeChatExportResult:
     """调用 WeChatDataAnalysis 导出指定微信会话。"""
     client = WeChatExportApiClient(request.api_base)
+    export_stem = _automatic_export_stem(
+        request.conversation_name,
+        request.usernames,
+        request.start_time,
+        request.end_time,
+    )
     job = client.create_export_job(
         account=request.account,
         scope=request.scope,
@@ -259,8 +260,7 @@ def export_wechat_chat(request: WeChatExportRequest) -> WeChatExportResult:
         include_media=request.include_media,
         media_kinds=request.media_kinds or DEFAULT_MEDIA_KINDS,
         backend_output_dir=request.backend_output_dir,
-        privacy_mode=request.privacy_mode,
-        export_name=request.export_name,
+        file_name=f"{export_stem}.zip",
     )
     export_id = str(job.get("exportId") or "").strip()
     if not export_id:
@@ -272,7 +272,6 @@ def export_wechat_chat(request: WeChatExportRequest) -> WeChatExportResult:
         poll_interval_seconds=request.poll_interval_seconds,
     )
 
-    export_stem = _export_stem(request.export_name, completed_job, export_id)
     zip_path = (request.output_root / f"{export_stem}.zip").resolve()
     export_dir = (request.output_root / export_stem).resolve()
     downloaded_zip = client.download_export_zip(export_id, zip_path)
@@ -300,13 +299,12 @@ def call_wechat_export_tool(arguments: dict[str, Any]) -> dict[str, Any]:
         api_base=str(arguments.get("api_base") or "").strip(),
         account=_optional_str(arguments.get("account")),
         usernames=_string_list(arguments.get("usernames")),
+        conversation_name=_optional_str(arguments.get("conversation_name")),
         start_time=_optional_int(arguments.get("start_time")),
         end_time=_optional_int(arguments.get("end_time")),
-        export_name=_optional_str(arguments.get("export_name")),
         output_root=Path(str(arguments.get("output_root") or "src/tools/wechatOutput")),
         backend_output_dir=_optional_str(arguments.get("backend_output_dir")),
         include_media=bool(arguments.get("include_media", True)),
-        privacy_mode=bool(arguments.get("privacy_mode", False)),
         timeout_seconds=int(arguments.get("timeout_seconds") or 600),
         poll_interval_seconds=float(arguments.get("poll_interval_seconds") or 1.0),
     )
@@ -327,31 +325,35 @@ def extract_zip_safely(zip_path: Path, output_dir: Path) -> Path:
     return output_dir
 
 
-def _export_stem(export_name: str | None, job: dict[str, Any], export_id: str) -> str:
-    """生成微信导出文件名主体。"""
-    if export_name:
-        return _strip_zip_suffix(_safe_name(export_name))
-    zip_path = str(job.get("zipPath") or "").strip()
-    if zip_path:
-        name = Path(zip_path.replace("\\", "/")).name
-        if name:
-            return _strip_zip_suffix(_safe_name(name))
-    return f"wechat_chat_export_{export_id}"
+def _automatic_export_stem(
+    conversation_name: str | None,
+    usernames: Iterable[str],
+    start_time: int | None,
+    end_time: int | None,
+) -> str:
+    """根据会话和中国时区下的导出日期生成稳定名称。"""
+    conversation = _safe_name(conversation_name) if conversation_name else "_".join(
+        _safe_name(username)
+        for username in usernames
+        if str(username).strip()
+    )
+    conversation = conversation or "conversation"
+    start_date = _format_export_date(start_time)
+    end_date = _format_export_date(end_time)
+    if start_date and end_date:
+        date_part = start_date if start_date == end_date else f"{start_date}_{end_date}"
+    else:
+        date_part = start_date or end_date or "all_dates"
+    return _safe_name(f"{conversation}_{date_part}")
 
 
-def _zip_file_name(export_name: str | None) -> str | None:
-    """生成导出 ZIP 文件名。"""
-    if not export_name:
+def _format_export_date(value: int | None) -> str | None:
+    """将 Unix 秒格式化为中国时区日期片段。"""
+    if value is None:
         return None
-    safe = _safe_name(export_name)
-    if not safe:
-        return None
-    return safe if safe.lower().endswith(".zip") else f"{safe}.zip"
-
-
-def _strip_zip_suffix(name: str) -> str:
-    """移除 ZIP 文件名后缀。"""
-    return name[:-4] if name.lower().endswith(".zip") else name
+    return datetime.fromtimestamp(int(value), timezone.utc).astimezone(
+        CHINA_TIMEZONE
+    ).strftime("%Y%m%d")
 
 
 def _safe_name(value: str) -> str:

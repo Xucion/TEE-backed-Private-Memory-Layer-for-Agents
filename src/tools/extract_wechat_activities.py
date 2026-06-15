@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         default=None,
-        help="Tongyi model name; defaults to TONGYI_MODEL or qwen-turbo.",
+        help="Tongyi model name; defaults to TONGYI_MODEL or qwen-max.",
     )
     parser.add_argument(
         "--minimum-score",

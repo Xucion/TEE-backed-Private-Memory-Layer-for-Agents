@@ -61,11 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export end time as Unix seconds.",
     )
     parser.add_argument(
-        "--export-name",
-        default=None,
-        help="Export file/directory name; .zip suffix is optional.",
-    )
-    parser.add_argument(
         "--output-root",
         type=Path,
         default=Path("src/tools/wechatOutput"),
@@ -82,11 +77,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not ask WeChatDataAnalysis to package media files.",
     )
     parser.add_argument(
-        "--privacy-mode",
-        action="store_true",
-        help="Enable WeChatDataAnalysis privacy_mode during API export.",
-    )
-    parser.add_argument(
         "--export-timeout",
         type=int,
         default=600,
@@ -101,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         default=None,
-        help="Tongyi model name; defaults to TONGYI_MODEL or qwen-turbo.",
+        help="Tongyi model name; defaults to TONGYI_MODEL or qwen-max.",
     )
     parser.add_argument(
         "--minimum-score",
@@ -131,11 +121,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate HTML but skip PDF export.",
     )
     parser.add_argument(
-        "--timezone-offset",
-        default="+08:00",
-        help="Local timezone offset for normalization timestamps.",
-    )
-    parser.add_argument(
         "--user-memory",
         action="append",
         default=[],
@@ -153,7 +138,6 @@ def build_report(
     skip_extract: bool = False,
     dry_run_llm: bool = False,
     make_pdf: bool = True,
-    timezone_offset: str = "+08:00",
     user_memories: list[str] | None = None,
 ) -> dict[str, Any]:
     """编排本地微信活动报告生成流水线。"""
@@ -171,7 +155,6 @@ def build_report(
     )
     normalized = normalize_export(
         export_root,
-        timezone_offset=timezone_offset,
         preference_profile=preference_profile,
     )
     write_result(
@@ -254,11 +237,10 @@ def build_report_from_wechat_api(
     usernames: list[str],
     start_time: int | None,
     end_time: int | None,
-    export_name: str | None,
     output_root: Path,
+    conversation_name: str | None = None,
     backend_output_dir: str | None = None,
     include_media: bool = True,
-    privacy_mode: bool = False,
     timeout_seconds: int = 600,
     poll_interval_seconds: float = 1.0,
     model_name: str | None = None,
@@ -267,7 +249,6 @@ def build_report_from_wechat_api(
     skip_extract: bool = False,
     dry_run_llm: bool = False,
     make_pdf: bool = True,
-    timezone_offset: str = "+08:00",
     user_memories: list[str] | None = None,
 ) -> dict[str, Any]:
     """调用 WeChatDataAnalysis 导出会话并生成报告。"""
@@ -276,14 +257,13 @@ def build_report_from_wechat_api(
             api_base=api_base,
             account=account,
             usernames=usernames,
+            conversation_name=conversation_name,
             start_time=start_time,
             end_time=end_time,
-            export_name=export_name,
             output_root=output_root,
             backend_output_dir=backend_output_dir,
             include_media=include_media,
             media_kinds=DEFAULT_MEDIA_KINDS,
-            privacy_mode=privacy_mode,
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
@@ -296,7 +276,6 @@ def build_report_from_wechat_api(
         skip_extract=skip_extract,
         dry_run_llm=dry_run_llm,
         make_pdf=make_pdf,
-        timezone_offset=timezone_offset,
         user_memories=user_memories,
     )
     report["wechat_export"] = export_result.to_dict()
@@ -319,11 +298,9 @@ def main() -> None:
             usernames=args.username,
             start_time=args.start_time,
             end_time=args.end_time,
-            export_name=args.export_name,
             output_root=args.output_root,
             backend_output_dir=args.backend_output_dir,
             include_media=not args.no_media,
-            privacy_mode=args.privacy_mode,
             timeout_seconds=args.export_timeout,
             poll_interval_seconds=args.export_poll_interval,
             model_name=args.model,
@@ -332,7 +309,6 @@ def main() -> None:
             skip_extract=args.skip_extract,
             dry_run_llm=args.dry_run_llm,
             make_pdf=not args.no_pdf,
-            timezone_offset=args.timezone_offset,
             user_memories=args.user_memory,
         )
     else:
@@ -346,7 +322,6 @@ def main() -> None:
             skip_extract=args.skip_extract,
             dry_run_llm=args.dry_run_llm,
             make_pdf=not args.no_pdf,
-            timezone_offset=args.timezone_offset,
             user_memories=args.user_memory,
         )
     print(json.dumps(result, ensure_ascii=False, indent=2))

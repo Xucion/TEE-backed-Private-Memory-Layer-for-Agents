@@ -69,10 +69,12 @@ def test_wechat_report_tool_resolves_group_name_for_weekly_request() -> None:
     assert resolved["keyword"] == "卫星互联网研究所（25级）"
     assert captured["account"] == "wxid_3own0jvr3p9k12"
     assert captured["usernames"] == ["123456@chatroom"]
+    assert captured["conversation_name"] == "卫星互联网研究所（25级）"
     assert captured["start_time"] == 1780329600
     assert captured["end_time"] == 1780934399
     assert captured["make_pdf"] is True
     assert captured["skip_extract"] is False
+    assert "export_name" not in captured
 
 
 def test_wechat_report_tool_parses_today_relative_date() -> None:

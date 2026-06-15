@@ -1,15 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
-
-
-class UserMemoryProvider(Protocol):
-    """Future adapter point for the project's privacy-preserving memory vault."""
-
-    def get_preference_memories(self, user_id: str) -> list[str]:
-        """读取指定用户经过隐私最小化的偏好记忆。"""
-        ...
+from typing import Any
 
 
 @dataclass
@@ -20,47 +12,6 @@ class PreferenceProfile:
     source_memories: list[str]
 
 
-TAG_KEYWORDS = {
-    "competition": ("比赛", "竞赛", "大赛", "挑战杯", "赛题"),
-    "entertainment": ("娱乐", "文艺", "音乐", "电影", "演出", "联谊", "聚会", "游戏"),
-    "sports": ("体育", "运动会", "篮球", "足球", "羽毛球", "乒乓球"),
-    "academic": ("讲座", "学术", "论坛", "研讨", "论文", "课题"),
-    "career": ("招聘", "实习", "就业", "宣讲"),
-    "volunteer": ("志愿", "公益"),
-}
-
-
-def profile_from_memories(memories: list[str]) -> PreferenceProfile:
-    """从自然语言记忆中构建兴趣与强制任务偏好画像。"""
-    interested: set[str] = set()
-    ignored: set[str] = set()
-    mandatory_only = False
-
-    for memory in memories:
-        normalized = memory.strip()
-        if not normalized:
-            continue
-        for tag, keywords in TAG_KEYWORDS.items():
-            if any(keyword in normalized for keyword in keywords):
-                if any(token in normalized for token in ("不关心", "不喜欢", "忽略")):
-                    ignored.add(tag)
-                else:
-                    interested.add(tag)
-        if (
-            ("只" in normalized and "必须" in normalized)
-            or "只需要知道必须" in normalized
-        ):
-            mandatory_only = True
-
-    return PreferenceProfile(
-        interested_tags=interested,
-        ignored_tags=ignored,
-        mandatory_only=mandatory_only,
-        source_memories=[memory for memory in memories if memory.strip()],
-    )
-
-
-# 覆盖上方乱码字面量，确保可以匹配中文偏好记忆。
 TAG_KEYWORDS = {
     "competition": ("比赛", "竞赛", "大赛", "挑战杯", "赛题"),
     "entertainment": ("娱乐", "文艺", "音乐", "电影", "演出", "联谊", "聚会", "游戏"),
